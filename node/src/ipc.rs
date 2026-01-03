@@ -2,6 +2,7 @@
 use crate::config::CoinbaseConfig;
 use crate::error::CoinbaseError;
 use crate::error::{classify_error, ErrorKind};
+use crate::payout::PayoutCommands;
 use crate::template_creator::{create_block_template, FinalTemplate};
 use crate::{TemplateId, MAX_CACHED_TEMPLATES};
 use std::collections::HashMap;
@@ -34,6 +35,7 @@ pub async fn ipc_block_listener(
     mut block_submission_rx: tokio::sync::mpsc::UnboundedReceiver<
         crate::stratum::BlockSubmissionRequest,
     >,
+    payout_cmd_sender: std::sync::mpsc::Sender<PayoutCommands>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     info!(
         socket = %ipc_socket_path,
@@ -117,9 +119,10 @@ pub async fn ipc_block_listener(
                 match get_template(
                     &mut shared_client,
                     RequestPriority::High,
-                    "initial template",
+                    "initial template", 
                     tip_height,
                     network,
+                    &payout_cmd_sender
                 ).await {
                     Ok(template) => {
                         if let Err(e) = block_template_tx.send(Arc::new(template)).await {
@@ -180,6 +183,7 @@ pub async fn ipc_block_listener(
                                                 &format!("block {}", height),
                                                 height,
                                                 network,
+                                                &payout_cmd_sender
                                             ).await {
                                                 Ok(template) => {
                                                     if let Err(e) = block_template_tx.send(Arc::new(template)).await {
@@ -400,6 +404,7 @@ async fn get_template(
     context: &str,
     block_height: u32,
     network: Network,
+    payout_cmd_sender: &std::sync::mpsc::Sender<PayoutCommands>,
 ) -> Result<client::BlockTemplate, Box<dyn std::error::Error>> {
     const MIN_TRANSACTION_COUNT: u64 = 1;
     const NONCE: u32 = 0;
@@ -409,8 +414,13 @@ async fn get_template(
         .get_block_template_components(None, Some(priority))
         .await?;
 
-    let final_template =
-        create_braidpool_template(&components.components, &config, block_height, NONCE)?;
+    let final_template = create_braidpool_template(
+        &components.components,
+        &config,
+        block_height,
+        NONCE,
+        payout_cmd_sender,
+    )?;
 
     let template_transaction_count = final_template.block_transaction_count();
 
@@ -439,6 +449,7 @@ fn create_braidpool_template(
     config: &CoinbaseConfig,
     block_height: u32,
     nonce: u32,
+    payout_cmd_sender: &std::sync::mpsc::Sender<PayoutCommands>,
 ) -> Result<FinalTemplate, CoinbaseError> {
     let braidpool_commitment = b"braidpool_bead_metadata_hash_32b";
     //8 bytes that is extranonce has a size of 32 bits
@@ -450,5 +461,6 @@ fn create_braidpool_template(
         block_height,
         nonce,
         config,
+        payout_cmd_sender,
     )
 }
