@@ -66,7 +66,7 @@ You can find all available command-line arguments in [node/src/cli.rs](https://g
 
 -   `--ipc-socket <PATH>`: Specifies the path to the UNIX domain socket file (should be the same as bitcoin node).
 -   `--network <NETWORK>`: Sets the network. Valid options are `mainnet`, `testnet4`, `signet`, and `cpunet`. The default is `mainnet`.
--   `--require-secp256k1-peers`: Disconnects peers whose PeerId is not a secp256k1 miner identity (for example legacy ed25519 nodes). Off by default. See [identity_specifications.md](identity_specifications.md).
+-   `--require-secp256k1-peers[=false]`: Ignores peers whose PeerId is not a secp256k1 miner identity (for example legacy ed25519 nodes): they are not used for gossip, sync or discovery. On by default. See [identity_specifications.md](identity_specifications.md).
 
 ## For probing current braidpool-node 
 - `braidpool-cli` crate can be utilized for accessing current braid-state including information about the `bead-count`,`bead-by-beadhash`,`tips` etc.

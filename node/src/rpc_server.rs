@@ -1929,16 +1929,9 @@ pub async fn test_get_node_info_rpc() {
 
 #[tokio::test]
 pub async fn test_get_peer_info_rpc() {
-    use crate::miner_identity::MinerIdentity;
     use libp2p::PeerId;
     use std::net::{IpAddr, Ipv4Addr};
     use std::time::Duration;
-
-    // Helper to generate a peer id (testing purpose only )
-    fn generate_peer_id() -> PeerId {
-        let keypair = MinerIdentity::generate().libp2p_keypair().unwrap();
-        PeerId::from(keypair.public())
-    }
 
     let braid: Arc<RwLock<braid::Braid>> = Arc::new(RwLock::new(braid::Braid::new(
         vec![create_test_bead(1, None)],

@@ -437,3 +437,129 @@ async fn test_floodsub_message_propagation() {
     )
     .await;
 }
+
+// ---- Protocol 2.0.0 cut-over -------------------------------------------------------------
+
+#[test]
+fn protocol_names_carry_the_version() {
+    let suffix = format!("/{PROTOCOL_VERSION}");
+    assert!(KADPROTOCOLNAME.as_ref().ends_with(&suffix));
+    assert!(IDENTIFYPROTOCOLNAME.as_ref().ends_with(&suffix));
+    assert!(BEAD_SYNC_PROTOCOL.as_ref().ends_with(&suffix));
+    assert!(BRAIDPOOL_TOPIC.ends_with(PROTOCOL_VERSION));
+    // Floodsub's own protocol name is fixed by libp2p; the topic carries the version instead.
+    assert_eq!(BEAD_ANNOUNCE_PROTOCOL.as_ref(), "/floodsub/1.0.0");
+    // None of the Braidpool names is still the pre-cut-over name.
+    for old in [
+        "/braidpool/kad/1.0.0",
+        "/braidpool/identify/1.0.0",
+        "/braidpool/bead-sync/1.0.0",
+        "braidpool_channel",
+    ] {
+        assert_ne!(KADPROTOCOLNAME.as_ref(), old);
+        assert_ne!(IDENTIFYPROTOCOLNAME.as_ref(), old);
+        assert_ne!(BEAD_SYNC_PROTOCOL.as_ref(), old);
+        assert_ne!(BRAIDPOOL_TOPIC, old);
+    }
+}
+
+#[test]
+fn version_gate_accepts_only_the_current_version() {
+    assert!(is_current_protocol_version(IDENTIFYPROTOCOLNAME.as_ref()));
+    assert!(!is_current_protocol_version("/braidpool/identify/1.0.0"));
+    assert!(!is_current_protocol_version("/braidpool/identify/2.0.1"));
+    assert!(!is_current_protocol_version("ipfs/0.1.0"));
+    assert!(!is_current_protocol_version(""));
+}
+
+/// A node that still speaks the pre-cut-over identify version, for the gate test below.
+#[derive(libp2p::swarm::NetworkBehaviour)]
+struct LegacyIdentifyBehaviour {
+    identify: libp2p::identify::Behaviour,
+}
+
+#[tokio::test]
+async fn current_nodes_pass_the_version_gate_and_carry_a_miner_key() {
+    let (mut listener, _) = build_swarm();
+    listener
+        .listen_on("/ip4/127.0.0.1/udp/0/quic-v1".parse().unwrap())
+        .unwrap();
+    let (mut dialer, _) = build_swarm();
+    // The dialer is driven by a task that owns it; hand it a stream-like wrapper.
+    let (tx, rx) = tokio::sync::oneshot::channel::<Multiaddr>();
+    let dialer_task = tokio::spawn(async move {
+        let addr = rx.await.unwrap();
+        dialer.dial(addr).unwrap();
+        while dialer.next().await.is_some() {}
+    });
+    let timeout_duration = std::time::Duration::from_secs(20);
+    let addr = loop {
+        match timeout(timeout_duration, listener.next()).await {
+            Ok(Some(SwarmEvent::NewListenAddr { address, .. })) => break address,
+            Ok(Some(_)) => {}
+            _ => panic!("listener did not start listening"),
+        }
+    };
+    tx.send(addr).unwrap();
+    let info = loop {
+        match timeout(timeout_duration, listener.next()).await {
+            Ok(Some(SwarmEvent::Behaviour(BraidPoolEvent::Identify(
+                libp2p::identify::Event::Received { info, .. },
+            )))) => break info,
+            Ok(Some(_)) => {}
+            _ => panic!("listener never received an identify message"),
+        }
+    };
+    dialer_task.abort();
+    assert!(is_current_protocol_version(&info.protocol_version));
+    assert!(crate::miner_identity::xonly_from_public_key(&info.public_key).is_some());
+}
+
+#[tokio::test]
+async fn peer_on_the_old_protocol_version_fails_the_gate() {
+    let (mut listener, _) = build_swarm();
+    listener
+        .listen_on("/ip4/127.0.0.1/udp/0/quic-v1".parse().unwrap())
+        .unwrap();
+    let legacy_key = crate::miner_identity::MinerIdentity::generate()
+        .libp2p_keypair()
+        .unwrap();
+    let mut legacy = SwarmBuilder::with_existing_identity(legacy_key)
+        .with_tokio()
+        .with_quic()
+        .with_behaviour(|key| LegacyIdentifyBehaviour {
+            identify: libp2p::identify::Behaviour::new(libp2p::identify::Config::new(
+                "/braidpool/identify/1.0.0".to_string(),
+                key.public(),
+            )),
+        })
+        .unwrap()
+        .build();
+    let (tx, rx) = tokio::sync::oneshot::channel::<Multiaddr>();
+    let legacy_task = tokio::spawn(async move {
+        let addr = rx.await.unwrap();
+        legacy.dial(addr).unwrap();
+        while legacy.next().await.is_some() {}
+    });
+    let timeout_duration = std::time::Duration::from_secs(20);
+    let addr = loop {
+        match timeout(timeout_duration, listener.next()).await {
+            Ok(Some(SwarmEvent::NewListenAddr { address, .. })) => break address,
+            Ok(Some(_)) => {}
+            _ => panic!("listener did not start listening"),
+        }
+    };
+    tx.send(addr).unwrap();
+    let info = loop {
+        match timeout(timeout_duration, listener.next()).await {
+            Ok(Some(SwarmEvent::Behaviour(BraidPoolEvent::Identify(
+                libp2p::identify::Event::Received { info, .. },
+            )))) => break info,
+            Ok(Some(_)) => {}
+            _ => panic!("listener never received an identify message"),
+        }
+    };
+    legacy_task.abort();
+    assert_eq!(info.protocol_version, "/braidpool/identify/1.0.0");
+    assert!(!is_current_protocol_version(&info.protocol_version));
+}

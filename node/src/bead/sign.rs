@@ -107,8 +107,21 @@ fn secp256k1_xonly(pk: &XOnlyPublicKey) -> bitcoin::secp256k1::XOnlyPublicKey {
         .expect("XOnlyPublicKey serialize is always a valid secp256k1 x-only key")
 }
 
-/// Reject beads whose uncommitted Schnorr signature is invalid, then extend the DAG.
+/// Reject beads whose uncommitted Schnorr signature is invalid or whose miner key is on the
+/// process-wide denylist, then extend the DAG.
 pub fn extend_verified(braid: &mut Braid, bead: &Bead) -> AddBeadStatus {
+    extend_verified_with(braid, bead, crate::miner_identity::active_key_denylist())
+}
+
+/// [`extend_verified`] with an explicit denylist.
+pub fn extend_verified_with(
+    braid: &mut Braid,
+    bead: &Bead,
+    denylist: &crate::miner_identity::KeyDenylist,
+) -> AddBeadStatus {
+    if denylist.contains(&bead.committed_metadata.comm_pub_key) {
+        return AddBeadStatus::InvalidBead;
+    }
     if verify_uncommitted_signature(bead).is_err() {
         return AddBeadStatus::InvalidBead;
     }
@@ -220,5 +233,37 @@ mod tests {
         let decoded: Bead = deserialize(&bytes).unwrap();
         assert_eq!(decoded, bead);
         verify_uncommitted_signature(&decoded).unwrap();
+    }
+
+    #[test]
+    fn extend_verified_with_rejects_a_denied_key_even_with_a_valid_signature() {
+        use crate::miner_identity::KeyDenylist;
+        let mut braid = crate::braid::Braid::new(Vec::new(), crate::config::PoolNetwork::Cpunet);
+        let mut bead = create_test_bead(1, None);
+        let known = MinerIdentity::test_fixture(); // secret 1, publicly known
+        known.sign_bead(&mut bead).unwrap();
+        verify_uncommitted_signature(&bead).unwrap(); // the signature itself is valid
+        assert!(matches!(
+            extend_verified_with(&mut braid, &bead, &KeyDenylist::known_secrets()),
+            AddBeadStatus::InvalidBead
+        ));
+        assert!(braid.beads.is_empty());
+        // The same bead is accepted when nothing is denied.
+        assert!(matches!(
+            extend_verified_with(&mut braid, &bead, &KeyDenylist::empty()),
+            AddBeadStatus::BeadAdded { .. }
+        ));
+    }
+
+    #[test]
+    fn extend_verified_with_accepts_an_ordinary_key() {
+        use crate::miner_identity::KeyDenylist;
+        let mut braid = crate::braid::Braid::new(Vec::new(), crate::config::PoolNetwork::Cpunet);
+        let mut bead = create_test_bead(1, None);
+        MinerIdentity::generate().sign_bead(&mut bead).unwrap();
+        assert!(matches!(
+            extend_verified_with(&mut braid, &bead, &KeyDenylist::known_secrets()),
+            AddBeadStatus::BeadAdded { .. }
+        ));
     }
 }

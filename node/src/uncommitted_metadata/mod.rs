@@ -89,3 +89,6 @@ impl Decodable for UnCommittedMetadata {
         })
     }
 }
+
+#[cfg(test)]
+mod tests;

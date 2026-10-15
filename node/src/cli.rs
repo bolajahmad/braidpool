@@ -74,9 +74,16 @@ pub struct Cli {
     #[arg(long, default_value = DEFAULT_IPC_SOCKET)]
     pub ipc_socket: String,
 
-    /// Reject peers whose PeerId is not a secp256k1 miner identity (e.g. legacy ed25519 peers).
-    /// Off by default while the bootnode still uses an ed25519 key.
-    #[arg(long, default_value_t = false)]
+    /// Ignore peers whose PeerId is not a secp256k1 miner identity (e.g. legacy ed25519 peers):
+    /// they are not used for gossip, sync or discovery. On by default; pass
+    /// `--require-secp256k1-peers=false` to allow them.
+    #[arg(
+        long,
+        default_value_t = true,
+        action = clap::ArgAction::Set,
+        num_args = 0..=1,
+        default_missing_value = "true"
+    )]
     pub require_secp256k1_peers: bool,
 
     /// Enable audit mode (proxy to upstream pool)
@@ -102,6 +109,16 @@ pub struct Cli {
     /// Weak difficulty for the miner in audit mode
     #[arg(long)]
     pub miner_difficulty: Option<f64>,
+
+    /// Also refuse beads signed by this miner key (64 hex chars, BIP340 x-only). Repeatable.
+    /// Added to the built-in denylist of keys whose secrets are publicly known.
+    #[arg(long = "deny-key")]
+    pub deny_key: Vec<String>,
+
+    /// Do not use the built-in denylist of publicly known keys (for local experiments only);
+    /// keys given with `--deny-key` still apply.
+    #[arg(long, default_value_t = false)]
+    pub no_default_key_denylist: bool,
 }
 
 #[cfg(test)]
@@ -132,12 +149,40 @@ mod tests {
     }
 
     #[test]
-    fn secp256k1_peer_requirement_is_off_by_default_and_opt_in() {
+    fn secp256k1_peer_requirement_is_on_by_default_and_can_be_disabled() {
         let default = Cli::try_parse_from(["braid", "--network", "cpunet"]).unwrap();
-        assert!(!default.require_secp256k1_peers);
-        let strict =
+        assert!(default.require_secp256k1_peers);
+        let explicit =
             Cli::try_parse_from(["braid", "--network", "cpunet", "--require-secp256k1-peers"])
                 .unwrap();
-        assert!(strict.require_secp256k1_peers);
+        assert!(explicit.require_secp256k1_peers);
+        let relaxed = Cli::try_parse_from([
+            "braid",
+            "--network",
+            "cpunet",
+            "--require-secp256k1-peers=false",
+        ])
+        .unwrap();
+        assert!(!relaxed.require_secp256k1_peers);
+    }
+
+    #[test]
+    fn key_denylist_flags() {
+        let default = Cli::try_parse_from(["braid", "--network", "cpunet"]).unwrap();
+        assert!(default.deny_key.is_empty());
+        assert!(!default.no_default_key_denylist);
+        let custom = Cli::try_parse_from([
+            "braid",
+            "--network",
+            "cpunet",
+            "--deny-key",
+            "aa",
+            "--deny-key",
+            "bb",
+            "--no-default-key-denylist",
+        ])
+        .unwrap();
+        assert_eq!(custom.deny_key, vec!["aa".to_string(), "bb".to_string()]);
+        assert!(custom.no_default_key_denylist);
     }
 }
