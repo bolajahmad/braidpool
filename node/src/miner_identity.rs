@@ -98,14 +98,26 @@ impl MinerIdentity {
         &self.secret
     }
 
+    /// The libp2p keypair for this node, derived from the miner secret.
+    ///
     /// libp2p's secp256k1 key is an ECDSA key, so the transport stays ECDSA; what is shared is
-    /// the secret. The x-coordinate of its public key equals [`MinerIdentity::xonly`], so the
-    /// resulting `PeerId` can be linked to beads with [`peer_id_matches_xonly`].
+    /// the secret. The secret is normalised to the even-y form first: a secret `d` and its
+    /// negation `n - d` have the same x-only key but opposite parity, so without this one bead
+    /// key could be run as two different `PeerId`s. After normalising, the public key always
+    /// starts with `02` and a bead key corresponds to exactly one `PeerId`. BIP340 signing is
+    /// unaffected (it normalises internally), and `xonly_from_public_key` rejects the `03` form.
     pub fn libp2p_keypair(
         &self,
     ) -> Result<libp2p::identity::Keypair, libp2p::identity::DecodingError> {
+        let secp = Secp256k1::new();
+        let (_, parity) =
+            bitcoin::secp256k1::Keypair::from_secret_key(&secp, &self.secret).x_only_public_key();
+        let canonical = match parity {
+            bitcoin::secp256k1::Parity::Even => self.secret,
+            bitcoin::secp256k1::Parity::Odd => self.secret.negate(),
+        };
         // `try_from_bytes` zeroizes its input on success; clear our copy on failure too.
-        let mut bytes = self.secret.secret_bytes();
+        let mut bytes = canonical.secret_bytes();
         let secret = match libp2p::identity::secp256k1::SecretKey::try_from_bytes(&mut bytes) {
             Ok(secret) => secret,
             Err(e) => {
@@ -129,9 +141,16 @@ fn miner_key_path(datadir: &Path) -> PathBuf {
 /// Multihash code of the identity hash function: the digest is the data itself.
 const IDENTITY_MULTIHASH_CODE: u64 = 0x00;
 
-/// The BIP340 x-only key of a libp2p public key, if it is a secp256k1 key.
+/// The BIP340 x-only key of a libp2p public key, if it is a canonical secp256k1 key.
+///
+/// Only the even-y form (`02` prefix) counts: that is what [`MinerIdentity::libp2p_keypair`]
+/// produces, so each bead key has exactly one `PeerId`. The odd-y form of the same x-only key
+/// (`03` prefix) and every other key type give `None`.
 pub fn xonly_from_public_key(public_key: &libp2p::identity::PublicKey) -> Option<XOnlyPublicKey> {
     let compressed = public_key.clone().try_into_secp256k1().ok()?.to_bytes();
+    if compressed[0] != 0x02 {
+        return None;
+    }
     XOnlyPublicKey::from_slice(&compressed[1..33]).ok()
 }
 
@@ -290,24 +309,79 @@ mod tests {
     }
 
     #[test]
-    fn matches_for_both_parities_of_the_public_point() {
-        let (mut even, mut odd) = (0, 0);
+    fn derived_libp2p_key_is_always_the_even_y_form() {
+        // A bead key must map to one PeerId: whatever the parity of the secret's public point,
+        // the derived libp2p key is the 02 form, and its x is the bead key.
+        let (mut even_secrets, mut odd_secrets) = (0, 0);
         for _ in 0..64 {
             let identity = MinerIdentity::generate();
+            let secp = bitcoin::secp256k1::Secp256k1::new();
+            let (_, parity) =
+                bitcoin::secp256k1::Keypair::from_secret_key(&secp, identity.secret_for_tests())
+                    .x_only_public_key();
+            match parity {
+                bitcoin::secp256k1::Parity::Even => even_secrets += 1,
+                bitcoin::secp256k1::Parity::Odd => odd_secrets += 1,
+            }
             let public = identity.libp2p_keypair().unwrap().public();
             let compressed = public.clone().try_into_secp256k1().unwrap().to_bytes();
-            match compressed[0] {
-                0x02 => even += 1,
-                0x03 => odd += 1,
-                other => panic!("unexpected prefix {other:#x}"),
-            }
+            assert_eq!(compressed[0], 0x02);
             assert_eq!(xonly_from_public_key(&public), Some(identity.xonly()));
             assert!(peer_id_matches_xonly(
                 &public.to_peer_id(),
                 &identity.xonly()
             ));
         }
-        assert!(even > 0 && odd > 0, "64 keys should cover both parities");
+        assert!(
+            even_secrets > 0 && odd_secrets > 0,
+            "64 secrets should include both parities"
+        );
+    }
+
+    #[test]
+    fn a_secret_and_its_negation_are_one_peer() {
+        let identity = MinerIdentity::generate();
+        let negated = MinerIdentity::from_secret(identity.secret_for_tests().negate());
+        assert_eq!(identity.xonly(), negated.xonly());
+        assert_eq!(
+            identity.libp2p_keypair().unwrap().public().to_peer_id(),
+            negated.libp2p_keypair().unwrap().public().to_peer_id()
+        );
+    }
+
+    #[test]
+    fn odd_y_libp2p_key_is_not_a_miner_identity() {
+        // Someone who builds the 03 form by hand (the un-normalised secret) gets a PeerId whose
+        // x equals a bead key, but it is not the canonical one and carries no miner key.
+        let identity = MinerIdentity::generate();
+        let canonical_keypair = identity.libp2p_keypair().unwrap();
+        let canonical = canonical_keypair.public();
+        // The canonical secret has an even-y public point; its negation has the odd-y one.
+        let canonical_secret = canonical_keypair
+            .try_into_secp256k1()
+            .unwrap()
+            .secret()
+            .to_bytes();
+        let mut odd_bytes = bitcoin::secp256k1::SecretKey::from_slice(&canonical_secret)
+            .unwrap()
+            .negate()
+            .secret_bytes();
+        let odd_secret =
+            libp2p::identity::secp256k1::SecretKey::try_from_bytes(&mut odd_bytes).unwrap();
+        let odd =
+            libp2p::identity::Keypair::from(libp2p::identity::secp256k1::Keypair::from(odd_secret))
+                .public();
+        let odd_compressed = odd.clone().try_into_secp256k1().unwrap().to_bytes();
+        assert_eq!(odd_compressed[0], 0x03);
+        assert_eq!(
+            odd.clone().try_into_secp256k1().unwrap().to_bytes()[1..],
+            canonical.clone().try_into_secp256k1().unwrap().to_bytes()[1..]
+        );
+        assert_ne!(odd.to_peer_id(), canonical.to_peer_id());
+        assert_eq!(xonly_from_public_key(&odd), None);
+        assert!(!peer_meets_key_policy(&odd.to_peer_id(), true));
+        assert!(peer_meets_key_policy(&odd.to_peer_id(), false));
+        assert!(peer_meets_key_policy(&canonical.to_peer_id(), true));
     }
 
     #[test]
