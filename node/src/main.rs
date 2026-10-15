@@ -40,13 +40,11 @@ use node::{
     SwarmCommand, TemplateId,
 };
 use std::collections::HashSet;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::HashMap, error::Error};
-use std::{fs, time::Duration};
 use tokio_util::sync::CancellationToken;
 #[allow(unused_imports)]
 use tracing::{debug, error, info, trace, warn};
@@ -852,45 +850,31 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .await;
     });
 
+    // The libp2p keystore uses the same creation rules as the miner key: created atomically
+    // with mode 0o400, never regenerated over an unreadable or invalid file.
     let keystore_path = datadir_path.join("keystore");
-    #[cfg(unix)]
-    {
-        if keystore_path.exists() {
-            let perms = fs::metadata(&keystore_path)?.permissions();
-            if perms.mode() & 0o777 != 0o400 {
-                warn!(
-                    permissions = perms.mode() & 0o777,
-                    "Keystore permissions are not secure, setting to 0o400"
-                );
-                let mut new_perms = perms.clone();
-                new_perms.set_mode(0o400);
-                fs::set_permissions(&keystore_path, new_perms)?;
-            }
-        }
-    }
-    let keypair = match fs::read(&keystore_path) {
-        Ok(keypair) => {
-            info!(path = %keystore_path.display(), "Loading keypair from keystore");
-            libp2p::identity::Keypair::from_protobuf_encoding(&keypair).map_err(|e| {
-                error!(error = %e, path = %keystore_path.display(), "Failed to read keypair from keystore");
-                e
-            })?
-        }
-        Err(_) => {
-            info!(path = %keystore_path.display(), "Generating new keypair");
-            let keypair: Keypair = libp2p::identity::Keypair::generate_ed25519();
-            let keypair_bytes = keypair.to_protobuf_encoding()?;
-            fs::write(&keystore_path, keypair_bytes)?;
-            #[cfg(unix)]
-            {
-                let mut perms = fs::metadata(&keystore_path)?.permissions();
-                perms.set_mode(0o400);
-                fs::set_permissions(&keystore_path, perms)?;
-                info!(path = %keystore_path.display(), perms = "0o400", "Set keystore permissions");
-            }
-            keypair
-        }
-    };
+    let (keystore_bytes, keystore_created) = node::secret_file::read_or_create_secret(
+        &keystore_path,
+        || {
+            libp2p::identity::Keypair::generate_ed25519()
+                .to_protobuf_encoding()
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+        },
+    )
+    .map_err(|e| {
+        error!(error = %e, path = %keystore_path.display(), "Failed to load or create keystore");
+        e
+    })?;
+    let keypair: Keypair = libp2p::identity::Keypair::from_protobuf_encoding(&keystore_bytes)
+        .map_err(|e| {
+            error!(error = %e, path = %keystore_path.display(), "Failed to read keypair from keystore");
+            e
+        })?;
+    info!(
+        path = %keystore_path.display(),
+        created = keystore_created,
+        "Keypair ready"
+    );
     // load beads from db (if present) and insert in braid here
     // Initializing the peer manager (shared between swarm and RPC server)
     // Using RwLock to allow concurrent reads (RPC server) while swarm handler can write

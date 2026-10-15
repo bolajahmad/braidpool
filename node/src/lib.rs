@@ -52,6 +52,7 @@ pub mod ipc;
 pub mod miner_identity;
 pub mod peer_manager;
 pub mod rpc_server;
+pub mod secret_file;
 pub mod stratum;
 pub mod template_creator;
 pub mod uncommitted_metadata;

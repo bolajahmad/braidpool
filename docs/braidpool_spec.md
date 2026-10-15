@@ -127,9 +127,11 @@ mining process. It contains:
 
 `comm_pub_key` is **not** an arbitrary Bitcoin `PublicKey`. Nodes MUST encode it as
 a BIP340 **x-only** secp256k1 public key: exactly 32 bytes (the x-coordinate).
-The corresponding y-coordinate is the even (quadratic residue) lift specified
-by BIP340 `lift_x`. `Compressed (02/03 + x), uncompressed, and DER encodings
-are invalid.`
+The corresponding y-coordinate is the **even** y specified by BIP340 `lift_x`
+(early BIP340 drafts chose y by a quadratic-residue test; the final standard and
+the libraries Braidpool uses choose the even y). Compressed (`02`/`03` + x),
+uncompressed, and DER encodings are invalid. The full identity, signature and
+key-file specification is in [`identity_specifications.md`](identity_specifications.md).
 
 `signature` in uncommitted metadata is a BIP340 Schnorr signature: exactly 64
 bytes. ECDSA DER signatures are invalid. The signed message is a tagged hash
