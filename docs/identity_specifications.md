@@ -3,7 +3,7 @@
 Beads replace blocks, and every bead must be attributable to the node that produced it.
 That attribution is `CommittedMetadata::comm_pub_key`, and the bead is authenticated by
 `UnCommittedMetadata::signature`. The party that is paid is identified separately, by
-`payout_address` (see [Open decisions](#open-decisions)).
+`payout_address` (see [Proposals](#proposals-non-normative)).
 
 **Rule.** Braidpool supports exactly one public-key format and exactly one signature
 scheme for anything it defines itself:
@@ -15,10 +15,21 @@ No other encoding, curve, hash-type byte or signature scheme is accepted, even f
 compatibility. This avoids the variation Bitcoin tolerates (compressed, uncompressed,
 DER, ECDSA, sighash suffixes).
 
-Status labels used below: **Implemented** (in this repository now) and **Planned**
-(specified here, not yet implemented).
+**How this document is organised.**
 
-## Bead public key (Implemented)
+| Part | Status | Contents |
+| --- | --- | --- |
+| [Specification](#specification) | Normative, implemented | key format, signature, key file, libp2p identity, protocol 2.0.0 |
+| [Migration notes](#migration-notes-for-operators) | Operational | what changes for a node operator, step by step |
+| [Questions for the Cryptographer review](#questions-for-the-cryptographer-review) | Open | precise questions, with the context needed to answer them |
+| [Proposals](#proposals-non-normative) | Non-normative | payout field, ECIES, hardening and follow-ups |
+| [Status](#status) | Summary | implemented, partly done, not done |
+
+---
+
+# Specification
+
+## Bead public key
 
 | | |
 | --- | --- |
@@ -36,13 +47,13 @@ uncompressed key (`04` + x + y), any DER-encoded key, any 32 bytes that are not 
 x-coordinate on the curve. `parse_xonly_pubkey` enforces this for the database and RPC
 paths, and `CommittedMetadata` decoding enforces it on the wire.
 
-## Bead signature (Implemented)
+## Bead signature
 
 | | |
 | --- | --- |
 | Rust type | `bitcoin::secp256k1::schnorr::Signature` |
-| Wire | exactly 64 raw bytes, `R.x (32) \|\| s (32)` |
-| JSON / database | lowercase hex of those 64 bytes |
+| Wire | exactly 64 raw bytes, `R.x (32) \|\| s (32)`; `UnCommittedMetadata` is exactly 84 bytes |
+| JSON / database | lowercase hex of those 64 bytes (128 hex chars) |
 | Scheme | BIP340, deterministic (`sign_schnorr_no_aux_rand`): no auxiliary randomness, the nonce is derived from the secret, the public key and the message, so the same bead signed twice gives the same signature |
 
 ### Message
@@ -57,10 +68,10 @@ payload = extra_nonce_1                  u64, little-endian, 8 bytes
        || committed_metadata             Braidpool consensus encoding (includes comm_pub_key)
 ```
 
-The signature itself and nothing else of the uncommitted metadata is excluded. Because
-the header and the committed metadata, including `comm_pub_key`, are inside the signed
-bytes, a valid signature cannot be moved onto a different bead, and cannot be checked
-against a different key.
+Only the signature field is excluded from what is signed. Because the header and the
+committed metadata, including `comm_pub_key`, are inside the signed bytes, a valid
+signature cannot be moved onto a different bead, and cannot be checked against a
+different key.
 
 ### Signing
 
@@ -80,20 +91,22 @@ Locally formed beads are signed by the node itself immediately before insertion.
 Rejected, and the bead is invalid: a signature that is not exactly 64 bytes, an ECDSA
 DER signature, a trailing sighash-type byte, and any signature that does not verify.
 
-### Signature tags (Proposed registry)
+### Signature tags
 
 Every signed object type has its own tag so that a signature made for one can never be
-valid for another. Convention: `Braidpool/<object>/<purpose>/v<N>`. The tag names below
-are proposals for maintainers to review; the rule that matters is that no two object
-types share a tag.
+valid for another. Convention: `Braidpool/<object>/<purpose>/v<N>`. The tag names are
+proposals for maintainers to review; the rule that matters is that no two object types
+share a tag.
 
 | Tag | Signed object | Status |
 | --- | --- | --- |
 | `Braidpool/bead/uncommitted/v1` | bead authentication (above) | Implemented |
-| `Braidpool/peer-binding/v1` | statement binding a PeerId to `comm_pub_key` | Reserved; unused if the libp2p key is derived from the miner secret (see below) |
 | `Braidpool/ecies/...` | any future signed ECIES handshake data | Reserved |
 
-## Miner key file (Implemented)
+A tag for binding a PeerId to the miner key was considered and is **not needed**: the
+libp2p key is derived from the miner secret, so the link is structural (see below).
+
+## Miner key file
 
 The secret behind `comm_pub_key` is stored at `datadir/miner_secp256k1`.
 
@@ -130,12 +143,7 @@ If the filesystem does not support hard links, the file is written directly with
   order. Anything else is an error and the file is left untouched.
 * A file whose mode is not `0o400` is tightened to `0o400` and a warning is logged.
 
-**Operator-visible changes.** A node with an existing `miner_secp256k1` keeps it. What can
-differ: a key file with group/other permission bits is tightened at startup; an unreadable
-or malformed key file stops the node with an error instead of being replaced;
-`MinerConfig.miner_pubkey` in the TOML configuration is unused.
-
-## libp2p peer key (Implemented)
+## libp2p peer key
 
 There is one secret per node, `datadir/miner_secp256k1`. The libp2p key is derived from it
 by `MinerIdentity::libp2p_keypair`, so the node's `PeerId` and the `comm_pub_key` in every
@@ -147,7 +155,7 @@ bead it forms come from the same key.
 | Public key | 33-byte compressed secp256k1 point (`02`/`03` followed by x) |
 | `PeerId` | identity multihash of the encoded public key (`16Uiu2HA…`); it contains the key |
 | Transport signatures | **ECDSA** (SHA-256, DER). This is libp2p's secp256k1 scheme; it is not BIP340 |
-| Used by | Kademlia, floodsub, identify (`/braidpool/identify/1.0.0`) and the QUIC/TLS handshake |
+| Used by | Kademlia, floodsub, identify and the QUIC/TLS handshake |
 | Retired | `datadir/keystore` (random ed25519). It is no longer read or written. If present, the node logs a warning and ignores it; it is not deleted |
 
 What is shared is the key, not the signature scheme.
@@ -166,96 +174,251 @@ What is shared is the key, not the signature scheme.
 
 Evidence:
 
-* A standalone experiment on the local branch `spike/libp2p-secp256k1` (15 checks) showed
-  that libp2p 0.55 with QUIC, identify, ping and floodsub works with a secret-derived
+* A standalone experiment (branch `spike/libp2p-secp256k1`, 15 checks) showed that
+  libp2p 0.55 with QUIC, identify, ping and floodsub works with a secret-derived
   secp256k1 identity, and that libp2p does not keep ed25519 peers out by itself.
 * The unit tests in `miner_identity` cover both parities of the public point, the
   stability of the `PeerId` for a given secret, and a bead that verifies under the key
   read from its signer's `PeerId`. The `behaviour` swarm tests run the real
   `BraidPoolBehaviour` on derived secp256k1 identities.
 
-Peer policy (Implemented):
+### Peer policy
 
-* libp2p accepts an ed25519 peer on a secp256k1 node, so the restriction to secp256k1
-  identities is enforced by Braidpool. With `--require-secp256k1-peers`, a node
-  disconnects any peer whose `PeerId` does not carry a miner key, as soon as the
-  connection is established (`peer_meets_key_policy`).
+libp2p accepts an ed25519 peer on a secp256k1 node, so the restriction to secp256k1
+identities is enforced by Braidpool.
+
+* **Key policy** (`--require-secp256k1-peers`, **on by default**; `=false` turns it
+  off). A peer whose `PeerId` does not carry a miner key is ignored (see quarantine
+  below) from the moment the connection is established (`peer_meets_key_policy`).
 * The `PeerId` is enough. The transport handshake proves the remote controls the key
   behind its `PeerId`, and a secp256k1 `PeerId` contains that key, so no identify
   payload is trusted and there is nothing for a peer to forge.
-* The flag is **off by default** for now, because the bootnode still uses an ed25519
-  key and a node that enforced the policy would disconnect from it and have no network.
-  With the flag off, such peers are allowed and logged. The default is to be switched on
-  when the bootnode key is rotated.
+* **Version policy.** A peer whose identify `protocol_version` is not ours is ignored as
+  soon as it identifies itself (`is_current_protocol_version`). This policy has no
+  switch: such a peer cannot decode our beads.
 * `getpeerinfo` reports each peer's `bead_key` (hex x-only key), or `null` for a peer
-  without a miner key. This is the key to compare with a bead's `comm_pub_key`.
+  without a miner key.
 * Beads are **not** rejected based on the peer that delivered them: floodsub relays
   beads, so the sender is often not the author. A bead is valid or not by its own
   signature.
 
-Not done yet (later phases):
+**Quarantine, not disconnect.** An ignored peer is left connected but unused: it is not
+added to the peer manager, to floodsub's partial view or to the DHT, and it is logged
+once. Disconnecting is worse. A disconnected floodsub peer redials immediately, and in a
+test with a peer on another protocol version that was **2,252 reconnects in 6 seconds and
+about 220% CPU on the rejecting node** (debug build, same machine); quarantining the same
+peer used about **0.1% CPU**. The protocols themselves do not negotiate with an
+incompatible peer, so an idle connection cannot exchange beads.
 
-* **Protocol strings.** They are unchanged (`/braidpool/identify/1.0.0` and the others).
-  They must be bumped together with the bead encoding change, so that old and new nodes
-  do not connect and then fail to decode.
-* **Bootnode.** `BOOTNODES` and the seed addresses in `main.rs` still name the old
-  ed25519 bootnode PeerId. A secp256k1 node can dial it, since libp2p accepts both key
-  types, but the constants must be replaced once the bootnode operator rotates its key.
+## Protocol 2.0.0
 
-**Operator-visible changes.** Every node's `PeerId` changes when it first starts on this
-version, because it now comes from the miner key. Bootstrap addresses that include a
-`/p2p/<PeerId>` of one of your own nodes must be updated. Addresses without a PeerId
-(`--addnode=/ip4/…/udp/…/quic-v1`) are unaffected.
+The `Bead` wire encoding changed in this release: 32-byte x-only keys and 64-byte
+Schnorr signatures replace 33-byte compressed keys and DER signatures. Nodes on
+different versions cannot exchange beads, so the network is cut over as a whole.
 
-### Key reuse across schemes
+| Name | Value | How it separates old from new |
+| --- | --- | --- |
+| Kademlia | `/braidpool/kad/2.0.0` | a real stream protocol: peers on another version fail to negotiate, so the DHTs stay apart |
+| Bead sync | `/braidpool/bead-sync/2.0.0` | a real stream protocol: requests to an old peer fail as unsupported |
+| Gossip topic | `braidpool_channel/2.0.0` | floodsub's own name (`/floodsub/1.0.0`) is fixed by libp2p and cannot carry a version, so the topic carries it; old and new peers share no topic |
+| Identify | `/braidpool/identify/2.0.0` | only the `protocol_version` string inside identify messages. Nothing checks it by itself; the version policy above does |
 
-One secret is used under ECDSA (libp2p) and BIP340 Schnorr (beads). The position taken
-here:
+A test pins every name to `PROTOCOL_VERSION`, and another that a peer identifying with
+the old string fails the check.
 
-* The security proofs of ECDSA and of BIP340 each assume the key is used only for that
-  scheme; a joint proof is not part of either standard. No practical attack on the
-  combination is known. This is an accepted, documented risk, pending the
-  Cryptographer review.
-* A signature of one scheme is not valid in the other (different verification
-  equations), and the messages are domain-separated: libp2p signs SHA-256 of its own
-  prefixed handshake data; beads sign a BIP340 tagged hash under a `Braidpool/…` tag.
-* The exposure that matters is an attacker steering what the key signs. Therefore,
-  **the identity key must never sign attacker-supplied data under either scheme**.
-  In libp2p's handshake the signed content is built by the node (its own ephemeral
-  certificate key); bead payloads are built by the node.
-* Any new signed object needs its own tag and must be built by the node.
-* Costs: two implementations (`k256` and `libsecp256k1`) handle the same secret, and a
-  compromise exposes transport and bead identity together.
+**Database format version.** The SQLite databases carry `PRAGMA user_version = 2`.
 
-## ECIES between mining nodes (Planned, non-normative, proof of concept)
+* A new database is stamped with 2.
+* A database with version 0 (created before versioning) that holds beads cannot be
+  read: its rows have 33-byte keys and DER signatures. The node stops at startup with an
+  error that says what to delete, instead of failing later with a decode error on the
+  first row.
+* A version-0 database with no beads is stamped in place.
+* A database with a higher version than the node knows is refused.
 
-The intended use is private messaging between miners (for example coordination for
-payout signing). No implementation is required yet. The requirement for when it is
-written:
+---
 
-An x-only key stands for two points, P and -P. ECDH on them gives shared points with the
-same x and different y. The default secp256k1 ECDH hashes the compressed point, which
-includes the parity byte, so the two parties can derive different secrets. In a test of
-2000 random keys, a sender that lifts the recipient's x-only key to even y and a
-recipient using its raw secret disagreed 1005 times. Either of these fixes it (0
-disagreements in the same test):
+# Migration notes for operators
 
-1. derive the key from the **x-coordinate only** of the shared point; or
-2. use the **BIP340-normalised secret** (negated if its public point has odd y) on the
-   side that holds the secret.
+These apply when upgrading a node from before protocol 2.0.0.
 
-Further requirements: the sender uses a fresh ephemeral key per message (forward
-secrecy); whether signing and decryption use the same key or separate keys is open; do
-not use a BIP341-tweaked output key for ECIES with the untweaked identity secret.
+1. **Your miner key is kept.** If `datadir/miner_secp256k1` exists it is reused, and
+   becomes the node's `comm_pub_key` and the source of its `PeerId`. If you never ran a
+   build that created it, one is generated on first start.
+2. **Your `PeerId` changes.** It now comes from the miner key instead of the old random
+   ed25519 key. Anything that names the old `PeerId` (a `/p2p/<PeerId>` in someone's
+   `--addnode`, a monitoring script) must be updated. Addresses without a PeerId
+   (`--addnode=/ip4/…/udp/…/quic-v1`) are unaffected. `getpeerinfo` shows the PeerId and
+   the `bead_key` of each peer.
+3. **`datadir/keystore` is ignored.** The node logs a warning and does not delete it.
+   You can delete it once you are on 2.0.0.
+4. **Old databases must be removed.** If `braidpool.db` holds beads from before 2.0.0,
+   startup stops with a message naming the file. Stop the node and delete
+   `braidpool.db`, `braidpool.db-wal` and `braidpool.db-shm` (and `audit.db*` if you run
+   audit mode and it is reported). The braid is rebuilt from the network. The miner key
+   is not affected.
+5. **No rolling upgrade.** Old and new nodes cannot exchange beads, and a 2.0.0 node
+   ignores old peers (and the reverse). Upgrade a whole set of nodes together. There is
+   no downgrade path for a database that has been stamped with version 2.
+6. **Bootstrap.** The hard-coded bootnode still runs the old protocol with an ed25519
+   `PeerId`; a 2.0.0 node dials it, finds that it speaks 1.0.0, and ignores it. Until
+   the bootnode operator upgrades it and `BOOTNODES`, `SEED_DNS` and `ADDR_REFRENCE`
+   in `node/src/main.rs` carry its new `PeerId`, a fresh node has no bootstrap peer.
+   Use `--addnode` to connect nodes explicitly in the meantime.
+7. **Flags.**
+   * `--require-secp256k1-peers` is on by default; `--require-secp256k1-peers=false`
+     allows peers without a miner key. Such peers are still ignored if they speak
+     another protocol version, which any pre-2.0.0 node does.
+8. **Two nodes on one machine** need separate data directories, because the `PeerId`
+   comes from the key in the data directory.
+9. **File permissions.** A key file that is not `0o400` is tightened at startup with a
+   warning. If a key file is unreadable or malformed the node stops rather than create a
+   new identity.
+10. **Operational note.** A peer on another protocol version is logged once and then
+    left idle. It still holds a connection until it closes.
 
-## Open decisions
+---
 
-* **Whom EDCA credits, and the payout field.** `payout_address` is currently a free
-  string validated only at the Stratum edge. Options: credit the payout script; one
-  address per key; or a separate x-only payout key. Undecided.
-* **Binding the key to the proof of work.** The signature authenticates the signer; the
-  coinbase commitment must also bind the committed metadata, including `comm_pub_key`,
-  to the work. This needs confirming outside audit mode.
-* **Known-key denylist.** A configurable list of keys that must never be accepted (for
-  example the secp256k1 generator point, whose secret is 1).
-* **Network of payout addresses.** Stratum currently accepts mainnet addresses only.
+# Questions for the Cryptographer review
+
+The design choices below have been made and are implemented; each question says what the
+reviewer is asked to confirm or reject, and what the fallback is.
+
+**Q1. One secret under ECDSA (libp2p) and BIP340 Schnorr (beads).**
+The libp2p secp256k1 key is the miner secret; libp2p signs with ECDSA (RFC 6979
+deterministic nonce, SHA-256, DER) via `k256`, beads sign with BIP340 via
+`libsecp256k1`. The position taken: the proofs for each scheme assume the key is used
+only for that scheme, no practical attack on the combination is known, messages are
+domain-separated (libp2p hashes its own prefixed handshake data; beads use a tagged hash),
+and the key never signs attacker-supplied data under either scheme.
+*Is this acceptable? If not, the fallback is a separate transport key plus a signed
+binding (`Braidpool/peer-binding/v1`), at the cost of a second secret and a PeerId that no
+longer proves the miner key by itself.*
+
+**Q2. What does the libp2p handshake sign, and can an outsider influence it?**
+Q1 relies on the claim that, in the QUIC/TLS handshake, the signed content is built by
+the node (its ephemeral certificate key) and not chosen by the peer. This was reasoned
+from the `libp2p-tls` source, not tested adversarially.
+*Please confirm for `libp2p-tls` 0.6.x, and for identify (which does not sign).*
+
+**Q3. Deterministic BIP340 signing.**
+Beads are signed with `sign_schnorr_no_aux_rand`, so a signature is a pure function of
+the key and the bead. That helps reproducibility and testing. BIP340 recommends fresh
+auxiliary randomness as hardening against fault and side-channel attacks.
+*Is deterministic signing acceptable for a node that signs automatically and
+continuously, or should auxiliary randomness be added?*
+
+**Q4. Is the signed payload unambiguous?**
+The payload concatenates fixed-width fields with `committed_metadata`, whose
+`TxIdVec`, parents, timestamps and strings are length-prefixed by consensus encoding.
+*Please confirm there are no two distinct beads with the same payload bytes, and that
+the 80-byte header plus metadata cannot be re-split differently.*
+
+**Q5. Is the key bound to the proof of work?**
+The signature authenticates the signer, but it does not by itself bind the signer to the
+work. In audit mode `compute_audit_bead_hash` covers the header and the committed
+metadata (and so the key). In normal mode the coinbase OP_RETURN carries only a short
+commitment, and no check ties the full committed metadata, including `comm_pub_key`
+and `payout_address`, to the header. If nothing does, someone who sees a valid header could
+re-sign it under their own key and address and claim its weight.
+*Is that attack real in normal mode, and what is the smallest commitment that closes it
+(for example a hash of the committed metadata in the OP_RETURN)?*
+
+**Q6. Two PeerIds for one bead key.**
+The link between a `PeerId` and `comm_pub_key` drops the parity byte. The secret `d` and
+its negation `n - d` have the same x-only key but different compressed keys (`02` vs `03`),
+hence two different `PeerId`s that both match one `comm_pub_key`. Their owner can run both.
+*Is it acceptable that one bead key can appear as two peers? If not, the rule could be
+to require the even-y form (normalise the secret before deriving the libp2p key).*
+
+**Q7. ECIES between mining nodes.** (Not implemented; this is to settle the design.)
+An x-only key stands for two points. ECDH over them yields the same x and different y,
+and the default secp256k1 ECDH hashes the compressed point including parity. In a test
+of 2,000 random keys a sender using the even-y lift of the recipient's key and a recipient
+using its raw secret disagreed 1,005 times; hashing only the x-coordinate, or using the
+BIP340-normalised secret, gave 0.
+*Which of the two should be specified? Should signing and decryption use the same key,
+or separate keys? Is ephemeral-static ECDH with a fresh ephemeral key per message enough,
+or is sender authentication needed?*
+
+**Q8. Known-secret keys.**
+The generator point G (secret 1) and similar keys have publicly known secrets, so
+anyone can sign as them. A configurable denylist is proposed (see below).
+*Is a denylist enough, or should the protocol forbid a fixed set of keys?*
+
+---
+
+# Proposals (non-normative)
+
+## Payout field
+
+`payout_address` is currently a free string, validated only at the Stratum edge, and
+there only as a mainnet address (`require_network(Bitcoin)`; the check came with the audit
+mode in #509, which itself requires mainnet). Under EDCA each miner puts its payout outputs in the coinbase of the
+beads it mines, so the payout scripts are covered by the header's merkle root, but which
+miner a bead's weight belongs to still needs an explicit field.
+
+| Option | What it means | Trade-off |
+| --- | --- | --- |
+| A. Credit the payout script | EDCA keys everything on the recipient; `comm_pub_key` only identifies the node that vouched for the bead | Matches what is paid; keeps multi-tenant nodes. No stable node identity for penalties |
+| B. One address per key | The address is derived from, or registered once for, `comm_pub_key` | Clean aggregation. Breaks nodes serving many workers unless each has its own key; puts payout control on a hot key |
+| C. Separate x-only payout key | Replace the string with a 32-byte x-only payout key (P2TR output key) in the committed metadata; the node key still signs | Both fields on x-only, fewer bytes, no string parsing; the payout key can be cold |
+
+Recommendation: C, once the team decides whom EDCA credits. Notes:
+
+* The same miner using several payout keys cannot be detected (keys are free), and does
+  not need to be: weight is per bead and outputs are per script. The cost is more
+  coinbase outputs, bounded by EDCA's dust rule.
+* P2TR outputs are 43 bytes against 31 for P2WPKH, about 39% more per output, which
+  matters for the already large coinbase. Wallet and exchange support for P2TR is not
+  universal. Raw x-only keys differ from BIP86-tweaked wallet addresses.
+* The Stratum address check should follow the configured network (as
+  `template_creator.rs` already does for cpunet) and report the expected network.
+* The payout script must be validated on every ingestion path, not only at Stratum.
+
+## ECIES between mining nodes
+
+Purpose (from `general_considerations.md`): keys "necessary for encrypted communication
+with this miner" and out-of-band contact information, for example coordination of payout
+signing. The specification says encrypted miner communication builds on StratumV2, which
+may already cover part of it. This stays a proof of concept; settle Q7 first.
+
+## Hardening and follow-ups
+
+* **Typed beads.** Parse into an `UnverifiedBead` that can only become a `SignedBead`
+  through verification, and make `Braid::extend` accept only `SignedBead`, so an unsigned
+  bead cannot reach the DAG. Today this is enforced by calling `extend_verified`.
+* **Known-key denylist.** A configurable list (default: G and test keys) checked in
+  `extend_verified`. It is a validation policy, not part of the encoding.
+* **Block list behaviour.** Quarantine avoids the redial loop. libp2p's allow/block-list
+  behaviour would deny known-bad `PeerId`s cheaply at connection time; it changes
+  `BraidPoolBehaviour`, so it is left as a decision.
+* **One name for the RPC field.** The bead key appears as `comm_pub_key` (code),
+  `comm_pubkey` (spec) and `common_pubkey` (RPC and CLI help). Pick one for the RPC.
+* **Dead configuration.** `MinerConfig.miner_pubkey` is unused and can be removed.
+* **Database constraints.** `CHECK(length(comm_pub_key) = 32)` and
+  `CHECK(length(signature) = 64)` would catch bad writes at the database.
+* **Functional test.** A test with two nodes that checks `getpeerinfo` reports the peer
+  and its `bead_key`, and that an incompatible peer is ignored. Needs `bitcoin-node`.
+* **Per-worker keys.** Nodes serving many workers sign every worker's beads with one key.
+  Per-worker keys give finer attribution at the price of more hot keys.
+
+---
+
+# Status
+
+| Item | State |
+| --- | --- |
+| BIP340 x-only key and Schnorr signature on beads | Implemented |
+| Signature verified on every ingestion path | Implemented |
+| Atomic `0o400` key file | Implemented |
+| libp2p identity derived from the miner key | Implemented |
+| `getpeerinfo` reports each peer's miner key | Implemented |
+| Key policy and version policy, quarantine | Implemented |
+| Protocol 2.0.0 names, topic, DB format version | Implemented |
+| Bootnode on 2.0.0 and its `PeerId` in `main.rs` | **Not done** (operator action) |
+| Binding the key to the proof of work (Q5) | **Open** |
+| Cryptographer review (Q1 to Q8) | **Open** |
+| Payout field (A, B or C) | **Open** |
+| ECIES | Proof of concept only |
+| Typed `SignedBead`, denylist, block list | Proposed |

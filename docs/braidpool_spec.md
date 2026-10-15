@@ -142,7 +142,9 @@ with tag `Braidpool/bead/uncommitted/v1` over:
 2. the consensus encoding of the block header;
 3. the consensus encoding of committed metadata.
 
-Binding the header and committed metadata prevents copying a valid signature onto a different bead. Each node persists a secp256k1 miner secret next to its libp2p identity; every bead it forms uses that node's x-only key.
+Binding the header and committed metadata prevents copying a valid signature onto a different bead. Each node persists one secp256k1 miner secret; every bead it forms uses that node's x-only key, and the node's libp2p `PeerId` is derived from the same secret, so a peer's miner key can be read from its `PeerId`.
+
+This encoding is protocol version 2.0.0. Nodes on a different protocol version cannot exchange beads and ignore each other; see "Protocol 2.0.0" and the migration notes in [`identity_specifications.md`](identity_specifications.md).
 
 The purpose of the timestamps is to gather higher resolution timestamps than are
 possible if the timestamp was committed, in order to measure (in a non-consensus
