@@ -157,7 +157,7 @@ What is shared is the key, not the signature scheme.
   comparison; keys of both parities link.
 * Any peer can read the miner key out of a secp256k1 `PeerId` and compare it with a
   bead's `comm_pub_key`. No additional signature is needed. The helpers are
-  `peer_identity::xonly_from_public_key`, `xonly_from_peer_id` and `peer_id_matches_xonly`.
+  `miner_identity::xonly_from_public_key`, `xonly_from_peer_id` and `peer_id_matches_xonly`.
 * Braidpool-defined signatures (beads and anything added later) are always BIP340
   Schnorr. "Schnorr only" applies to what Braidpool defines, not to libp2p's handshake.
 * One secret per machine. Running the same secret on two machines yields the same
@@ -169,16 +169,32 @@ Evidence:
 * A standalone experiment on the local branch `spike/libp2p-secp256k1` (15 checks) showed
   that libp2p 0.55 with QUIC, identify, ping and floodsub works with a secret-derived
   secp256k1 identity, and that libp2p does not keep ed25519 peers out by itself.
-* The unit tests in `peer_identity` cover both parities of the public point, the
+* The unit tests in `miner_identity` cover both parities of the public point, the
   stability of the `PeerId` for a given secret, and a bead that verifies under the key
   read from its signer's `PeerId`. The `behaviour` swarm tests run the real
   `BraidPoolBehaviour` on derived secp256k1 identities.
 
+Peer policy (Implemented):
+
+* libp2p accepts an ed25519 peer on a secp256k1 node, so the restriction to secp256k1
+  identities is enforced by Braidpool. With `--require-secp256k1-peers`, a node
+  disconnects any peer whose `PeerId` does not carry a miner key, as soon as the
+  connection is established (`peer_meets_key_policy`).
+* The `PeerId` is enough. The transport handshake proves the remote controls the key
+  behind its `PeerId`, and a secp256k1 `PeerId` contains that key, so no identify
+  payload is trusted and there is nothing for a peer to forge.
+* The flag is **off by default** for now, because the bootnode still uses an ed25519
+  key and a node that enforced the policy would disconnect from it and have no network.
+  With the flag off, such peers are allowed and logged. The default is to be switched on
+  when the bootnode key is rotated.
+* `getpeerinfo` reports each peer's `bead_key` (hex x-only key), or `null` for a peer
+  without a miner key. This is the key to compare with a bead's `comm_pub_key`.
+* Beads are **not** rejected based on the peer that delivered them: floodsub relays
+  beads, so the sender is often not the author. A bead is valid or not by its own
+  signature.
+
 Not done yet (later phases):
 
-* **Peer enforcement.** Nothing yet rejects a peer whose identify key is not secp256k1,
-  or whose key does not match its connecting `PeerId`. libp2p accepts an ed25519 peer on
-  a secp256k1 node, so until this is added a mixed network is possible.
 * **Protocol strings.** They are unchanged (`/braidpool/identify/1.0.0` and the others).
   They must be bumped together with the bead encoding change, so that old and new nodes
   do not connect and then fail to decode.

@@ -74,6 +74,11 @@ pub struct Cli {
     #[arg(long, default_value = DEFAULT_IPC_SOCKET)]
     pub ipc_socket: String,
 
+    /// Reject peers whose PeerId is not a secp256k1 miner identity (e.g. legacy ed25519 peers).
+    /// Off by default while the bootnode still uses an ed25519 key.
+    #[arg(long, default_value_t = false)]
+    pub require_secp256k1_peers: bool,
+
     /// Enable audit mode (proxy to upstream pool)
     #[arg(long, default_value = "false")]
     pub audit: bool,
@@ -124,5 +129,15 @@ mod tests {
         let result = Cli::try_parse_from(["braid", "--rpc-bind", "127.0.0.1"]);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn secp256k1_peer_requirement_is_off_by_default_and_opt_in() {
+        let default = Cli::try_parse_from(["braid", "--network", "cpunet"]).unwrap();
+        assert!(!default.require_secp256k1_peers);
+        let strict =
+            Cli::try_parse_from(["braid", "--network", "cpunet", "--require-secp256k1-peers"])
+                .unwrap();
+        assert!(strict.require_secp256k1_peers);
     }
 }

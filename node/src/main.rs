@@ -867,10 +867,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         "libp2p identity derived from the miner key"
     );
     // load beads from db (if present) and insert in braid here
-    // Initializing the peer manager (shared between swarm and RPC server)
-    let peer_manager_arc = Arc::new(tokio::sync::RwLock::new(PeerManager::new(8)));
-    // Two nodes on one machine need separate data directories: the PeerId comes from the
-    // miner key in the data directory, and the same PeerId causes OutgoingConnectionError.
     let current_broadcast_topic: floodsub::Topic = floodsub::Topic::new(BRAIDPOOL_TOPIC);
 
     let swarm_builder = libp2p::SwarmBuilder::with_existing_identity(keypair)
@@ -1060,10 +1056,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         };
     }
     let peer_manager_arc_for_swarm = peer_manager_arc.clone();
+    let require_secp256k1_peers = args.require_secp256k1_peers;
     let swarm_handle = if !args.audit {
         tokio::spawn(async move {
             let braid = std::sync::Arc::clone(&braid);
             let peer_manager_arc = peer_manager_arc_for_swarm;
+            // A rejected legacy peer keeps reconnecting (floodsub redials its target peers), so
+            // warn once per peer instead of once per attempt.
+            let mut rejected_peers: HashSet<PeerId> = HashSet::new();
             loop {
                 tokio::select! {
                   swarm_event = swarm.select_next_some()=>{
@@ -1375,9 +1375,36 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                   }
                               }
                           }
+                          SwarmEvent::ConnectionEstablished { peer_id, .. }
+                              if !node::miner_identity::peer_meets_key_policy(
+                                  &peer_id,
+                                  require_secp256k1_peers,
+                              ) =>
+                          {
+                              if rejected_peers.len() > 1024 {
+                                  rejected_peers.clear();
+                              }
+                              if rejected_peers.insert(peer_id) {
+                                  warn!(
+                                      peer = %peer_id,
+                                      "Rejecting peer: its PeerId is not a secp256k1 miner identity \
+                                       (--require-secp256k1-peers)"
+                                  );
+                              } else {
+                                  debug!(peer = %peer_id, "Rejected peer reconnected; disconnecting again");
+                              }
+                              let _ = swarm.disconnect_peer_id(peer_id);
+                          }
                           SwarmEvent::ConnectionEstablished {
                               peer_id, endpoint, ..
                           } => {
+                              if node::miner_identity::xonly_from_peer_id(&peer_id).is_none() {
+                                  info!(
+                                      peer = %peer_id,
+                                      "Peer has no miner key (its PeerId is not secp256k1); \
+                                       allowed because --require-secp256k1-peers is off"
+                                  );
+                              }
 
                               // Add the peer to the peer manager
                               let remote_addr = endpoint.get_remote_address();

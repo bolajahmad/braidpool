@@ -1983,7 +1983,8 @@ pub async fn test_get_peer_info_rpc() {
 
     // --- 2. Test with one peer ---
     let mut peer_manager_with_peers = PeerManager::new(8);
-    let peer_id = generate_peer_id();
+    let peer_identity = crate::miner_identity::MinerIdentity::generate();
+    let peer_id = PeerId::from(peer_identity.libp2p_keypair().unwrap().public());
     let peer_id_str = peer_id.to_base58();
     let peer_ip = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 5));
     peer_manager_with_peers.add_peer(peer_id, false, Some(peer_ip));
@@ -2031,6 +2032,11 @@ pub async fn test_get_peer_info_rpc() {
     assert_eq!(peers_array[0]["ip"], "192.168.1.5");
     assert_eq!(peers_array[0]["latency_ms"], 75.0);
     assert!(peers_array[0]["score"].as_f64().unwrap() > 0.0);
+    // The peer's miner key is read from its secp256k1 PeerId
+    assert_eq!(
+        peers_array[0]["bead_key"],
+        peer_identity.xonly().to_string()
+    );
 }
 
 #[tokio::test]
