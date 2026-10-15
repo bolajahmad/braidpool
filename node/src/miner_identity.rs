@@ -109,13 +109,7 @@ impl MinerIdentity {
     pub fn libp2p_keypair(
         &self,
     ) -> Result<libp2p::identity::Keypair, libp2p::identity::DecodingError> {
-        let secp = Secp256k1::new();
-        let (_, parity) =
-            bitcoin::secp256k1::Keypair::from_secret_key(&secp, &self.secret).x_only_public_key();
-        let canonical = match parity {
-            bitcoin::secp256k1::Parity::Even => self.secret,
-            bitcoin::secp256k1::Parity::Odd => self.secret.negate(),
-        };
+        let canonical = canonical_secret(&self.secret);
         // `try_from_bytes` zeroizes its input on success; clear our copy on failure too.
         let mut bytes = canonical.secret_bytes();
         let secret = match libp2p::identity::secp256k1::SecretKey::try_from_bytes(&mut bytes) {
@@ -128,10 +122,48 @@ impl MinerIdentity {
         Ok(libp2p::identity::secp256k1::Keypair::from(secret).into())
     }
 
+    /// ECDH shared point with the holder of the x-only key `peer`; see [`ecdh_shared_point`].
+    pub fn ecdh_shared_point(&self, peer: &XOnlyPublicKey) -> [u8; 64] {
+        ecdh_shared_point(&self.secret, peer)
+    }
+
     pub fn sign_bead(&self, bead: &mut Bead) -> Result<(), BeadSignError> {
         bead.committed_metadata.comm_pub_key = self.xonly;
         sign_uncommitted_metadata(bead, &self.secret)
     }
+}
+
+/// The even-y form of `secret`: `secret` itself if its public point has an even y, else its
+/// negation `n - secret`.
+///
+/// An x-only key stands for two points, P and -P, and a secret `d` and its negation have the
+/// same x-only key. Anything that must agree on one point (the libp2p key, ECDH) therefore
+/// always uses this form, for ephemeral keys as well as the miner key, so no code ever has to
+/// guess a parity.
+pub fn canonical_secret(secret: &SecretKey) -> SecretKey {
+    let secp = Secp256k1::new();
+    let (_, parity) =
+        bitcoin::secp256k1::Keypair::from_secret_key(&secp, secret).x_only_public_key();
+    match parity {
+        bitcoin::secp256k1::Parity::Even => *secret,
+        bitcoin::secp256k1::Parity::Odd => secret.negate(),
+    }
+}
+
+/// ECDH shared point between `secret` and the holder of the x-only key `peer`.
+///
+/// Returns the 64 bytes `x || y` of `canonical_secret(secret) * lift_x(peer)`. The peer's key is
+/// lifted to its even-y point, and the secret is first reduced to its even-y form, so both sides
+/// compute the identical point, y included. With a raw secret, about half of all pairs would
+/// disagree on y, and any KDF that hashes the compressed point (parity byte) would give two
+/// different keys. The caller derives its key from this point with its own domain-separated
+/// hash; this is a primitive, not a finished ECIES.
+pub fn ecdh_shared_point(secret: &SecretKey, peer: &XOnlyPublicKey) -> [u8; 64] {
+    let peer_point = bitcoin::secp256k1::PublicKey::from_x_only_public_key(
+        *peer,
+        bitcoin::secp256k1::Parity::Even,
+    );
+    bitcoin::secp256k1::ecdh::shared_secret_point(&peer_point, &canonical_secret(secret))
 }
 
 fn miner_key_path(datadir: &Path) -> PathBuf {
@@ -441,5 +473,75 @@ mod tests {
         // On: only secp256k1 identities are.
         assert!(peer_meets_key_policy(&secp, true));
         assert!(!peer_meets_key_policy(&ed, true));
+    }
+
+    #[test]
+    fn ecdh_with_canonical_keys_always_agrees() {
+        // Both sides only know the other's x-only key. With canonical secrets they compute the
+        // same point, y included, for every pair (both parities occur among 500 pairs).
+        let mut odd_secret_seen = false;
+        for _ in 0..500 {
+            let a = MinerIdentity::generate();
+            let b = MinerIdentity::generate();
+            let secp = bitcoin::secp256k1::Secp256k1::new();
+            let (_, parity) =
+                bitcoin::secp256k1::Keypair::from_secret_key(&secp, a.secret_for_tests())
+                    .x_only_public_key();
+            odd_secret_seen |= parity == bitcoin::secp256k1::Parity::Odd;
+            assert_eq!(
+                a.ecdh_shared_point(&b.xonly()),
+                b.ecdh_shared_point(&a.xonly())
+            );
+        }
+        assert!(odd_secret_seen);
+    }
+
+    #[test]
+    fn ecdh_with_raw_secrets_would_disagree_about_half_the_time() {
+        // Documents why canonical secrets are used: lifting the peer's x-only key to even y and
+        // multiplying by a raw secret gives a point whose y depends on the secret's parity.
+        let mut disagreements = 0;
+        for _ in 0..200 {
+            let a = MinerIdentity::generate();
+            let b = MinerIdentity::generate();
+            let raw = |sk: &SecretKey, peer: &XOnlyPublicKey| {
+                let point = bitcoin::secp256k1::PublicKey::from_x_only_public_key(
+                    *peer,
+                    bitcoin::secp256k1::Parity::Even,
+                );
+                bitcoin::secp256k1::ecdh::shared_secret_point(&point, sk)
+            };
+            if raw(a.secret_for_tests(), &b.xonly()) != raw(b.secret_for_tests(), &a.xonly()) {
+                disagreements += 1;
+            }
+        }
+        assert!(
+            disagreements > 40,
+            "expected roughly half of 200 pairs to disagree, got {disagreements}"
+        );
+    }
+
+    #[test]
+    fn ecdh_is_the_same_for_a_secret_and_its_negation() {
+        let a = MinerIdentity::generate();
+        let a_negated = MinerIdentity::from_secret(a.secret_for_tests().negate());
+        let b = MinerIdentity::generate();
+        assert_eq!(
+            a.ecdh_shared_point(&b.xonly()),
+            a_negated.ecdh_shared_point(&b.xonly())
+        );
+    }
+
+    #[test]
+    fn canonical_secret_is_idempotent_and_even_y() {
+        let secp = bitcoin::secp256k1::Secp256k1::new();
+        for _ in 0..64 {
+            let sk = *MinerIdentity::generate().secret_for_tests();
+            let canonical = canonical_secret(&sk);
+            assert_eq!(canonical_secret(&canonical), canonical);
+            let (_, parity) =
+                bitcoin::secp256k1::Keypair::from_secret_key(&secp, &canonical).x_only_public_key();
+            assert_eq!(parity, bitcoin::secp256k1::Parity::Even);
+        }
     }
 }
