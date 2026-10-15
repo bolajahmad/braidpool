@@ -53,6 +53,11 @@ use behaviour::{BraidPoolBehaviour, BraidPoolBehaviourEvent};
 use crate::behaviour::KADPROTOCOLNAME;
 const LATENCY_ALPHA: u64 = 10; // seconds
                                //boot nodes peerIds
+
+// TODO(protocol 2.0.0): the bootnode below still runs protocol 1.0.0 with an ed25519 PeerId. A
+// 2.0.0 node can dial it but disconnects it once it identifies itself (different protocol
+// version), so a fresh node has no bootstrap peer until the operator upgrades the bootnode and
+// these three constants carry its new secp256k1 PeerId. Until then use `--addnode`.
 const BOOTNODES: [&str; 1] = ["12D3KooWG9z8TziaNuYyEcc9FeUC3FTtrEf2XSnSdDpLvx4Jh2w3"];
 //dns NS
 const SEED_DNS: &str = "/dnsaddr/french.braidpool.net";
@@ -1061,9 +1066,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         tokio::spawn(async move {
             let braid = std::sync::Arc::clone(&braid);
             let peer_manager_arc = peer_manager_arc_for_swarm;
-            // A rejected legacy peer keeps reconnecting (floodsub redials its target peers), so
-            // warn once per peer instead of once per attempt.
-            let mut rejected_peers: HashSet<PeerId> = HashSet::new();
+            // Peers we ignore because they are incompatible (legacy key type or another protocol
+            // version). They are quarantined, not disconnected: a disconnected floodsub peer
+            // redials at once, which measured at over 2,000 reconnects in 6 seconds and more
+            // than 200% CPU on this node. Left connected and unused, they cost nothing.
+            let mut quarantined_peers: HashSet<PeerId> = HashSet::new();
             loop {
                 tokio::select! {
                   swarm_event = swarm.select_next_some()=>{
@@ -1294,6 +1301,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
                           )) => {
                               debug!(peer = ?peer_id, "Sent identify info");
                           }
+                          // A peer on another protocol version cannot exchange beads with us (the
+                          // bead encoding differs). Quarantine it as soon as it identifies itself.
+                          SwarmEvent::Behaviour(BraidPoolBehaviourEvent::Identify(
+                              identify::Event::Received { peer_id, info, .. },
+                          )) if !behaviour::is_current_protocol_version(&info.protocol_version) => {
+                              if quarantined_peers.len() > 1024 {
+                                  quarantined_peers.clear();
+                              }
+                              if quarantined_peers.insert(peer_id) {
+                                  warn!(
+                                      peer = %peer_id,
+                                      their_version = %info.protocol_version,
+                                      our_version = %behaviour::IDENTIFYPROTOCOLNAME,
+                                      "Ignoring peer: it speaks a different protocol version"
+                                  );
+                              }
+                              // It was added when the connection opened, before it identified itself.
+                              peer_manager_arc.write().await.remove_peer(&peer_id);
+                              swarm.behaviour_mut().bead_announce.remove_node_from_partial_view(&peer_id);
+                              swarm.behaviour_mut().kademlia.remove_peer(&peer_id);
+                          }
                           SwarmEvent::Behaviour(BraidPoolBehaviourEvent::Identify(
                               identify::Event::Received { peer_id, info,  .. },
                           )) => {
@@ -1375,31 +1403,32 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                   }
                               }
                           }
+                          // The transport handshake has authenticated `peer_id`, and a secp256k1
+                          // PeerId contains the miner key, so no further proof is needed. A peer
+                          // without a miner key is not added anywhere and its connection is left
+                          // idle (see `quarantined_peers`).
                           SwarmEvent::ConnectionEstablished { peer_id, .. }
                               if !node::miner_identity::peer_meets_key_policy(
                                   &peer_id,
                                   require_secp256k1_peers,
                               ) =>
                           {
-                              if rejected_peers.len() > 1024 {
-                                  rejected_peers.clear();
+                              if quarantined_peers.len() > 1024 {
+                                  quarantined_peers.clear();
                               }
-                              if rejected_peers.insert(peer_id) {
+                              if quarantined_peers.insert(peer_id) {
                                   warn!(
                                       peer = %peer_id,
-                                      "Rejecting peer: its PeerId is not a secp256k1 miner identity \
+                                      "Ignoring peer: its PeerId is not a secp256k1 miner identity \
                                        (--require-secp256k1-peers)"
                                   );
-                              } else {
-                                  debug!(peer = %peer_id, "Rejected peer reconnected; disconnecting again");
                               }
-                              let _ = swarm.disconnect_peer_id(peer_id);
                           }
                           SwarmEvent::ConnectionEstablished {
                               peer_id, endpoint, ..
                           } => {
                               if node::miner_identity::xonly_from_peer_id(&peer_id).is_none() {
-                                  info!(
+                                  debug!(
                                       peer = %peer_id,
                                       "Peer has no miner key (its PeerId is not secp256k1); \
                                        allowed because --require-secp256k1-peers is off"

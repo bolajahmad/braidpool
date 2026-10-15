@@ -12,12 +12,31 @@ use libp2p::{
 };
 use std::{error::Error, time::Duration};
 
-// Protocol names
-pub const KADPROTOCOLNAME: StreamProtocol = StreamProtocol::new("/braidpool/kad/1.0.0");
-pub const IDENTIFYPROTOCOLNAME: StreamProtocol = StreamProtocol::new("/braidpool/identify/1.0.0");
-pub const BEAD_SYNC_PROTOCOL: StreamProtocol = StreamProtocol::new("/braidpool/bead-sync/1.0.0");
+// Protocol names.
+//
+// Version 2.0.0 is the cut-over to BIP340 x-only miner keys and Schnorr signatures: the `Bead`
+// wire encoding changed (32-byte keys, 64-byte signatures), so nodes on different versions
+// cannot exchange beads. Each name below separates the old and new networks in a different
+// way, see `docs/identity_specifications.md`:
+//
+// * Kademlia and bead-sync are real stream protocols: peers on another version fail to negotiate.
+// * Floodsub's own protocol name (`/floodsub/1.0.0`) is fixed by libp2p and cannot carry a
+//   version, so the gossip topic carries it instead.
+// * Identify's name is only the `protocol_version` string inside identify messages, nothing
+//   checks it by itself; `is_current_protocol_version` is the check, applied in `main.rs`.
+//
+// Every name must carry `PROTOCOL_VERSION` (see the `protocol_names_carry_the_version` test).
+pub const PROTOCOL_VERSION: &str = "2.0.0";
+pub const KADPROTOCOLNAME: StreamProtocol = StreamProtocol::new("/braidpool/kad/2.0.0");
+pub const IDENTIFYPROTOCOLNAME: StreamProtocol = StreamProtocol::new("/braidpool/identify/2.0.0");
+pub const BEAD_SYNC_PROTOCOL: StreamProtocol = StreamProtocol::new("/braidpool/bead-sync/2.0.0");
 pub const BEAD_ANNOUNCE_PROTOCOL: StreamProtocol = StreamProtocol::new("/floodsub/1.0.0");
-pub const BRAIDPOOL_TOPIC: &str = "braidpool_channel";
+pub const BRAIDPOOL_TOPIC: &str = "braidpool_channel/2.0.0";
+
+/// True if a peer's identify `protocol_version` is the version this node speaks.
+pub fn is_current_protocol_version(protocol_version: &str) -> bool {
+    protocol_version == IDENTIFYPROTOCOLNAME.as_ref()
+}
 
 // Configuration for the request-response protocol
 #[derive(Debug, Clone)]
