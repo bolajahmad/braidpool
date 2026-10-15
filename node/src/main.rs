@@ -111,6 +111,40 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let ibd_spinlock = Arc::new(ibd_or_not);
 
     // Resolving datadir or the default datadir if not provided .
+    // Install the key denylist before any bead is verified (the database is reloaded below).
+    let key_denylist = {
+        let mut list = if args.no_default_key_denylist {
+            node::miner_identity::KeyDenylist::empty()
+        } else {
+            node::miner_identity::KeyDenylist::known_secrets()
+        };
+        for hex_key in &args.deny_key {
+            let bytes = hex::decode(hex_key.trim()).map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("--deny-key {hex_key}: not hex: {e}"),
+                )
+            })?;
+            let key = node::bead::sign::parse_xonly_pubkey(&bytes).map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("--deny-key {hex_key}: {e}"),
+                )
+            })?;
+            list = list.with_key(key);
+        }
+        list
+    };
+    info!(
+        denied_keys = key_denylist.len(),
+        "Miner key denylist active"
+    );
+    node::miner_identity::set_active_key_denylist(key_denylist.clone()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "the miner key denylist was already initialised",
+        )
+    })?;
     let datadir_path = resolve_datadir(&args.datadir)?;
     // Initializing the braid object with read write lock
     //for supporting concurrent readers and single writer
@@ -254,6 +288,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let miner_identity = Arc::new(node::miner_identity::MinerIdentity::load_or_generate(
         &datadir_path,
     )?);
+    miner_identity.ensure_allowed(&key_denylist)?;
     //Communication bridge between stratum and network swarm and swarm commands also, for communicating share population and propogating them further
     let (swarm_handler, mut swarm_command_receiver) = SwarmHandler::new_with_identity(
         Arc::clone(&braid),
