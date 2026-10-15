@@ -395,11 +395,11 @@ impl PeerManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use libp2p::identity::Keypair;
+    use crate::miner_identity::MinerIdentity;
     use std::net::{Ipv4Addr, Ipv6Addr};
 
     fn generate_peer_id() -> PeerId {
-        let keypair = Keypair::generate_ed25519();
+        let keypair = MinerIdentity::generate().libp2p_keypair().unwrap();
         PeerId::from(keypair.public())
     }
 

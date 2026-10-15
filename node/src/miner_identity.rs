@@ -1,7 +1,7 @@
 //! Per-node secp256k1 miner identity used for BIP340 bead signatures.
 //!
-//! Distinct from the libp2p swarm keystore (ed25519). Both live in the data
-//! directory and identify the same process.
+//! This one secret is the node's whole identity: the BIP340 x-only key committed in every
+//! bead, and the secp256k1 key behind the libp2p `PeerId` (see [`MinerIdentity::libp2p_keypair`]).
 
 use crate::bead::sign::{sign_uncommitted_metadata, BeadSignError};
 use crate::bead::Bead;
@@ -14,7 +14,7 @@ use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 use tracing::info;
 
-/// File name of the secp256k1 miner secret next to the libp2p `keystore`.
+/// File name of the secp256k1 miner secret in the data directory.
 pub const MINER_SECP256K1_FILENAME: &str = "miner_secp256k1";
 
 /// secp256k1 key used as `CommittedMetadata.comm_pub_key` and to Schnorr-sign
@@ -43,7 +43,7 @@ impl MinerIdentity {
         )
     }
 
-    /// Generate a fresh miner identity (tests and first-run keystore).
+    /// Generate a fresh miner identity (tests and first run).
     pub fn generate() -> Self {
         let secp = Secp256k1::new();
         let (secret, _) = secp.generate_keypair(&mut OsRng);
@@ -96,6 +96,24 @@ impl MinerIdentity {
     #[cfg(test)]
     pub(crate) fn secret_for_tests(&self) -> &SecretKey {
         &self.secret
+    }
+
+    /// libp2p's secp256k1 key is an ECDSA key, so the transport stays ECDSA; what is shared is
+    /// the secret. The x-coordinate of its public key equals [`MinerIdentity::xonly`], so the
+    /// resulting `PeerId` can be linked to beads with [`crate::peer_identity`].
+    pub fn libp2p_keypair(
+        &self,
+    ) -> Result<libp2p::identity::Keypair, libp2p::identity::DecodingError> {
+        // `try_from_bytes` zeroizes its input on success; clear our copy on failure too.
+        let mut bytes = self.secret.secret_bytes();
+        let secret = match libp2p::identity::secp256k1::SecretKey::try_from_bytes(&mut bytes) {
+            Ok(secret) => secret,
+            Err(e) => {
+                bytes.fill(0);
+                return Err(e);
+            }
+        };
+        Ok(libp2p::identity::secp256k1::Keypair::from(secret).into())
     }
 
     pub fn sign_bead(&self, bead: &mut Bead) -> Result<(), BeadSignError> {

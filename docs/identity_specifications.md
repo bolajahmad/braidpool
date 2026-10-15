@@ -130,61 +130,66 @@ If the filesystem does not support hard links, the file is written directly with
   order. Anything else is an error and the file is left untouched.
 * A file whose mode is not `0o400` is tightened to `0o400` and a warning is logged.
 
-The libp2p `keystore` file follows the same creation and loading rules (it is
-protobuf-encoded rather than 32 raw bytes). Before this change, any read error on
-`keystore` silently generated a new peer identity.
+**Operator-visible changes.** A node with an existing `miner_secp256k1` keeps it. What can
+differ: a key file with group/other permission bits is tightened at startup; an unreadable
+or malformed key file stops the node with an error instead of being replaced;
+`MinerConfig.miner_pubkey` in the TOML configuration is unused.
 
-**Operator-visible changes.** A node with an existing key keeps it. What can now differ:
-a key file with group/other permission bits is tightened at startup; an unreadable or
-malformed key file stops the node with an error where the `keystore` previously
-regenerated; `MinerConfig.miner_pubkey` in the TOML configuration is unused.
+## libp2p peer key (Implemented)
 
-## libp2p peer key
-
-### Current implementation (Implemented)
+There is one secret per node, `datadir/miner_secp256k1`. The libp2p key is derived from it
+by `MinerIdentity::libp2p_keypair`, so the node's `PeerId` and the `comm_pub_key` in every
+bead it forms come from the same key.
 
 | | |
 | --- | --- |
-| Generation | `libp2p::identity::Keypair::generate_ed25519()`, random, independent of the miner key |
-| Persistence | `datadir/keystore`, libp2p private-key protobuf (not a raw 32-byte secret) |
-| Public key / PeerId | Ed25519 point; the `PeerId` is an identity multihash of it (`12D3Koo…`) |
+| Derivation | the 32-byte miner secret loaded as a libp2p `secp256k1::SecretKey` |
+| Public key | 33-byte compressed secp256k1 point (`02`/`03` followed by x) |
+| `PeerId` | identity multihash of the encoded public key (`16Uiu2HA…`); it contains the key |
+| Transport signatures | **ECDSA** (SHA-256, DER). This is libp2p's secp256k1 scheme; it is not BIP340 |
 | Used by | Kademlia, floodsub, identify (`/braidpool/identify/1.0.0`) and the QUIC/TLS handshake |
-| Signs | the swarm only; bead code never uses it |
+| Retired | `datadir/keystore` (random ed25519). It is no longer read or written. If present, the node logs a warning and ignores it; it is not deleted |
 
-The RPC field `common_pubkey` is the bead x-only key. `getpeerinfo` reports the PeerId.
-Today these are two unrelated identities for the same process, so a peer cannot prove
-that the PeerId relaying a bead is the miner key that signed it.
+What is shared is the key, not the signature scheme.
 
-### Decision (Planned): derive the libp2p key from the miner secret
-
-The libp2p key is derived from the same 32-byte secret as the bead key, so there is one
-secret and one identity per node.
-
-* libp2p's secp256k1 key is an **ECDSA** key: 33-byte compressed public key, SHA-256
-  message hash, DER signatures. It is not BIP340. The transport therefore stays ECDSA.
-* What is shared is the key, not the signature scheme. The x-coordinate of the libp2p
-  public key (`bytes[1..33]` of the 33-byte form) **is** the bead `comm_pub_key`.
-  The parity byte is discarded and does not matter for the comparison.
-* A secp256k1 PeerId is an identity multihash that contains the compressed key, so any
-  peer can read the miner key out of a PeerId and compare it with a bead's
-  `comm_pub_key`. No additional signature is needed.
-* Braidpool-defined signatures (beads and anything added later) are always BIP340 Schnorr.
-  "Schnorr only" applies to what Braidpool defines, not to libp2p's own handshake.
-* Peers whose identify key is not secp256k1, or whose key does not hash to the
-  connecting PeerId, are to be rejected. libp2p will not do this by itself: it accepts
-  an ed25519 peer on a secp256k1 node.
+* The x-coordinate of the libp2p public key (`bytes[1..33]` of the 33-byte form) **is**
+  the bead `comm_pub_key`. The parity byte is discarded and does not affect the
+  comparison; keys of both parities link.
+* Any peer can read the miner key out of a secp256k1 `PeerId` and compare it with a
+  bead's `comm_pub_key`. No additional signature is needed. The helpers are
+  `peer_identity::xonly_from_public_key`, `xonly_from_peer_id` and `peer_id_matches_xonly`.
+* Braidpool-defined signatures (beads and anything added later) are always BIP340
+  Schnorr. "Schnorr only" applies to what Braidpool defines, not to libp2p's handshake.
 * One secret per machine. Running the same secret on two machines yields the same
-  PeerId, which the network treats as one node.
+  `PeerId`, which the network treats as one node. Two nodes on one machine need separate
+  data directories.
 
-Evidence: a standalone experiment on the local branch `spike/libp2p-secp256k1`
-(15 checks, `run.sh`) showed that libp2p 0.55 with QUIC, identify, ping and floodsub
-works with a secret-derived secp256k1 identity, that the x-coordinate matches the
-BIP340 key of the same secret (including odd-y keys), and that ed25519 peers are not
-excluded by libp2p.
+Evidence:
 
-Migration impact (Planned, not part of the key-file change): every PeerId changes, the
-`keystore` file is retired, the protocol strings must be bumped, and the hard-coded
-bootnode PeerId in `main.rs` must be replaced once its operator rotates its key.
+* A standalone experiment on the local branch `spike/libp2p-secp256k1` (15 checks) showed
+  that libp2p 0.55 with QUIC, identify, ping and floodsub works with a secret-derived
+  secp256k1 identity, and that libp2p does not keep ed25519 peers out by itself.
+* The unit tests in `peer_identity` cover both parities of the public point, the
+  stability of the `PeerId` for a given secret, and a bead that verifies under the key
+  read from its signer's `PeerId`. The `behaviour` swarm tests run the real
+  `BraidPoolBehaviour` on derived secp256k1 identities.
+
+Not done yet (later phases):
+
+* **Peer enforcement.** Nothing yet rejects a peer whose identify key is not secp256k1,
+  or whose key does not match its connecting `PeerId`. libp2p accepts an ed25519 peer on
+  a secp256k1 node, so until this is added a mixed network is possible.
+* **Protocol strings.** They are unchanged (`/braidpool/identify/1.0.0` and the others).
+  They must be bumped together with the bead encoding change, so that old and new nodes
+  do not connect and then fail to decode.
+* **Bootnode.** `BOOTNODES` and the seed addresses in `main.rs` still name the old
+  ed25519 bootnode PeerId. A secp256k1 node can dial it, since libp2p accepts both key
+  types, but the constants must be replaced once the bootnode operator rotates its key.
+
+**Operator-visible changes.** Every node's `PeerId` changes when it first starts on this
+version, because it now comes from the miner key. Bootstrap addresses that include a
+`/p2p/<PeerId>` of one of your own nodes must be updated. Addresses without a PeerId
+(`--addnode=/ip4/…/udp/…/quic-v1`) are unaffected.
 
 ### Key reuse across schemes
 

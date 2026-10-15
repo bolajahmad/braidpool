@@ -1929,14 +1929,14 @@ pub async fn test_get_node_info_rpc() {
 
 #[tokio::test]
 pub async fn test_get_peer_info_rpc() {
-    use libp2p::identity::Keypair;
+    use crate::miner_identity::MinerIdentity;
     use libp2p::PeerId;
     use std::net::{IpAddr, Ipv4Addr};
     use std::time::Duration;
 
     // Helper to generate a peer id (testing purpose only )
     fn generate_peer_id() -> PeerId {
-        let keypair = Keypair::generate_ed25519();
+        let keypair = MinerIdentity::generate().libp2p_keypair().unwrap();
         PeerId::from(keypair.public())
     }
 

@@ -7,7 +7,6 @@ use libp2p::{
     core::multiaddr::Multiaddr,
     floodsub::{self},
     identify,
-    identity::Keypair,
     kad::{self, Mode, QueryResult},
     ping, request_response,
     swarm::SwarmEvent,
@@ -255,7 +254,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Arc::clone(&braid),
         db_tx.clone(),
         Arc::clone(&dashboard_notifier),
-        miner_identity,
+        Arc::clone(&miner_identity),
     );
 
     //Swarm command sender
@@ -850,39 +849,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .await;
     });
 
-    // The libp2p keystore uses the same creation rules as the miner key: created atomically
-    // with mode 0o400, never regenerated over an unreadable or invalid file.
-    let keystore_path = datadir_path.join("keystore");
-    let (keystore_bytes, keystore_created) = node::secret_file::read_or_create_secret(
-        &keystore_path,
-        || {
-            libp2p::identity::Keypair::generate_ed25519()
-                .to_protobuf_encoding()
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
-        },
-    )
-    .map_err(|e| {
-        error!(error = %e, path = %keystore_path.display(), "Failed to load or create keystore");
+    let keypair = miner_identity.libp2p_keypair().map_err(|e| {
+        error!(error = %e, "Failed to derive the libp2p keypair from the miner secret");
         e
     })?;
-    let keypair: Keypair = libp2p::identity::Keypair::from_protobuf_encoding(&keystore_bytes)
-        .map_err(|e| {
-            error!(error = %e, path = %keystore_path.display(), "Failed to read keypair from keystore");
-            e
-        })?;
+    let legacy_keystore_path = datadir_path.join("keystore");
+    if legacy_keystore_path.exists() {
+        warn!(
+            path = %legacy_keystore_path.display(),
+            "Ignoring the legacy ed25519 keystore: the PeerId is now derived from the miner \
+             secp256k1 key, so this node's PeerId has changed. The file can be deleted."
+        );
+    }
     info!(
-        path = %keystore_path.display(),
-        created = keystore_created,
-        "Keypair ready"
+        peer_id = %keypair.public().to_peer_id(),
+        comm_pub_key = %miner_identity.xonly(),
+        "libp2p identity derived from the miner key"
     );
     // load beads from db (if present) and insert in braid here
     // Initializing the peer manager (shared between swarm and RPC server)
-    // Using RwLock to allow concurrent reads (RPC server) while swarm handler can write
     let peer_manager_arc = Arc::new(tokio::sync::RwLock::new(PeerManager::new(8)));
-    //For local testing uncomment this keypair peer since it running to process will
-    //result in same peerID leading to OutgoingConnectionError
-    // let keypair = identity::Keypair::generate_ed25519();
-    //creating a main topic subscribing to the current test topic
+    // Two nodes on one machine need separate data directories: the PeerId comes from the
+    // miner key in the data directory, and the same PeerId causes OutgoingConnectionError.
     let current_broadcast_topic: floodsub::Topic = floodsub::Topic::new(BRAIDPOOL_TOPIC);
 
     let swarm_builder = libp2p::SwarmBuilder::with_existing_identity(keypair)
