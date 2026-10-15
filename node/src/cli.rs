@@ -102,6 +102,16 @@ pub struct Cli {
     /// Weak difficulty for the miner in audit mode
     #[arg(long)]
     pub miner_difficulty: Option<f64>,
+
+    /// Also refuse beads signed by this miner key (64 hex chars, BIP340 x-only). Repeatable.
+    /// Added to the built-in denylist of keys whose secrets are publicly known.
+    #[arg(long = "deny-key")]
+    pub deny_key: Vec<String>,
+
+    /// Do not use the built-in denylist of publicly known keys (for local experiments only);
+    /// keys given with `--deny-key` still apply.
+    #[arg(long, default_value_t = false)]
+    pub no_default_key_denylist: bool,
 }
 
 #[cfg(test)]
@@ -139,5 +149,25 @@ mod tests {
             Cli::try_parse_from(["braid", "--network", "cpunet", "--require-secp256k1-peers"])
                 .unwrap();
         assert!(strict.require_secp256k1_peers);
+    }
+
+    #[test]
+    fn key_denylist_flags() {
+        let default = Cli::try_parse_from(["braid", "--network", "cpunet"]).unwrap();
+        assert!(default.deny_key.is_empty());
+        assert!(!default.no_default_key_denylist);
+        let custom = Cli::try_parse_from([
+            "braid",
+            "--network",
+            "cpunet",
+            "--deny-key",
+            "aa",
+            "--deny-key",
+            "bb",
+            "--no-default-key-denylist",
+        ])
+        .unwrap();
+        assert_eq!(custom.deny_key, vec!["aa".to_string(), "bb".to_string()]);
+        assert!(custom.no_default_key_denylist);
     }
 }

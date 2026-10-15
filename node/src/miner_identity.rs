@@ -9,9 +9,11 @@ use crate::secret_file::read_or_create_secret;
 use bitcoin::secp256k1::{Secp256k1, SecretKey};
 use bitcoin::XOnlyPublicKey;
 use rand::rngs::OsRng;
+use std::collections::HashSet;
 use std::fmt;
 use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use tracing::info;
 
 /// File name of the secp256k1 miner secret in the data directory.
@@ -122,6 +124,25 @@ impl MinerIdentity {
         Ok(libp2p::identity::secp256k1::Keypair::from(secret).into())
     }
 
+    /// Refuse to run with a denied key. For the built-in list its secret is publicly known, so
+    /// anyone could sign as this node.
+    ///
+    /// # Errors
+    /// `InvalidData` naming the key if it is on `denylist`.
+    pub fn ensure_allowed(&self, denylist: &KeyDenylist) -> io::Result<()> {
+        if denylist.contains(&self.xonly) {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "miner key {} is on the key denylist; delete the miner_secp256k1 file \
+                     to generate a new one",
+                    self.xonly
+                ),
+            ));
+        }
+        Ok(())
+    }
+
     /// ECDH shared point with the holder of the x-only key `peer`; see [`ecdh_shared_point`].
     pub fn ecdh_shared_point(&self, peer: &XOnlyPublicKey) -> [u8; 64] {
         ecdh_shared_point(&self.secret, peer)
@@ -164,6 +185,91 @@ pub fn ecdh_shared_point(secret: &SecretKey, peer: &XOnlyPublicKey) -> [u8; 64] 
         bitcoin::secp256k1::Parity::Even,
     );
     bitcoin::secp256k1::ecdh::shared_secret_point(&peer_point, &canonical_secret(secret))
+}
+
+/// Secrets `1..=KNOWN_SMALL_SECRETS` are public by construction: anyone can compute `k * G`.
+pub const KNOWN_SMALL_SECRETS: u32 = 1024;
+
+/// Secret keys published with the BIP340 test vectors. Vector 0 (secret 3) is already covered by
+/// the small secrets, so it is not repeated here.
+const BIP340_TEST_VECTOR_SECRETS: [&str; 3] = [
+    "B7E151628AED2A6ABF7158809CF4F3C762E7160F38B4DA56A784D9045190CFEF",
+    "C90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B14E5C9",
+    "0B432B2677937381AEF05BB02A66ECD012773062CF3FA2549E44F58ED2401710",
+];
+
+/// Miner keys that must never be accepted because their secrets are publicly known, so anyone
+/// could sign as them.
+///
+/// This is a validation policy, not part of the encoding: changing the list never changes the
+/// wire format. The default list ([`KeyDenylist::known_secrets`]) is built from secrets, not
+/// from hard-coded public keys; see `docs/identity_specifications.md` for the groups.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct KeyDenylist {
+    keys: HashSet<XOnlyPublicKey>,
+}
+
+impl KeyDenylist {
+    /// A list that denies nothing (the default, and what tests use).
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    /// The production default: the keys of the secrets `1..=KNOWN_SMALL_SECRETS` (this includes
+    /// the generator point, secret 1) and of the BIP340 test-vector secrets.
+    pub fn known_secrets() -> Self {
+        let mut list = Self::empty();
+        for k in 1..=KNOWN_SMALL_SECRETS {
+            let mut bytes = [0u8; 32];
+            bytes[28..].copy_from_slice(&k.to_be_bytes());
+            if let Ok(secret) = SecretKey::from_slice(&bytes) {
+                list.keys.insert(MinerIdentity::from_secret(secret).xonly());
+            }
+        }
+        for hex in BIP340_TEST_VECTOR_SECRETS {
+            if let Some(secret) = hex::decode(hex)
+                .ok()
+                .and_then(|bytes| SecretKey::from_slice(&bytes).ok())
+            {
+                list.keys.insert(MinerIdentity::from_secret(secret).xonly());
+            }
+        }
+        list
+    }
+
+    /// This list plus one more denied key.
+    pub fn with_key(mut self, key: XOnlyPublicKey) -> Self {
+        self.keys.insert(key);
+        self
+    }
+
+    /// True if `key` is denied.
+    pub fn contains(&self, key: &XOnlyPublicKey) -> bool {
+        self.keys.contains(key)
+    }
+
+    /// Number of denied keys.
+    pub fn len(&self) -> usize {
+        self.keys.len()
+    }
+
+    /// True if the list denies nothing.
+    pub fn is_empty(&self) -> bool {
+        self.keys.is_empty()
+    }
+}
+
+static ACTIVE_KEY_DENYLIST: OnceLock<KeyDenylist> = OnceLock::new();
+
+/// Install the denylist this process enforces. Call once, at startup, before any bead is
+/// verified. Returns the list back if one is already installed (or was already read).
+pub fn set_active_key_denylist(list: KeyDenylist) -> Result<(), KeyDenylist> {
+    ACTIVE_KEY_DENYLIST.set(list)
+}
+
+/// The denylist this process enforces; empty unless [`set_active_key_denylist`] installed one.
+pub fn active_key_denylist() -> &'static KeyDenylist {
+    ACTIVE_KEY_DENYLIST.get_or_init(KeyDenylist::default)
 }
 
 fn miner_key_path(datadir: &Path) -> PathBuf {
@@ -543,5 +649,78 @@ mod tests {
                 bitcoin::secp256k1::Keypair::from_secret_key(&secp, &canonical).x_only_public_key();
             assert_eq!(parity, bitcoin::secp256k1::Parity::Even);
         }
+    }
+
+    #[test]
+    fn default_denylist_covers_the_known_secret_groups() {
+        let list = KeyDenylist::known_secrets();
+        // Small secrets: the generator point (secret 1), 2G and 3G, up to the last one.
+        for hex in [
+            "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+            "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+            "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9",
+        ] {
+            assert!(list.contains(&hex.parse().unwrap()), "{hex}");
+        }
+        let mut last = [0u8; 32];
+        last[28..].copy_from_slice(&KNOWN_SMALL_SECRETS.to_be_bytes());
+        let last_key = MinerIdentity::from_secret(SecretKey::from_slice(&last).unwrap()).xonly();
+        assert!(list.contains(&last_key));
+        let mut beyond = [0u8; 32];
+        beyond[28..].copy_from_slice(&(KNOWN_SMALL_SECRETS + 1).to_be_bytes());
+        let beyond_key =
+            MinerIdentity::from_secret(SecretKey::from_slice(&beyond).unwrap()).xonly();
+        assert!(!list.contains(&beyond_key));
+        // BIP340 test vectors (public keys as published with the vectors).
+        for hex in [
+            "dff1d77f2a671c5f36183726db2341be58feae1da2deced843240f7b502ba659",
+            "dd308afec5777e13121fa72b9cc1b7cc0139715309b086c960e18fd969774eb8",
+            "25d1dff95105f5253c4022f628a996ad3a0d95fbf21d468a1b33f8c160d8f517",
+        ] {
+            assert!(list.contains(&hex.parse().unwrap()), "{hex}");
+        }
+        assert_eq!(list.len(), KNOWN_SMALL_SECRETS as usize + 3);
+    }
+
+    #[test]
+    fn denylist_does_not_touch_ordinary_keys() {
+        let list = KeyDenylist::known_secrets();
+        for _ in 0..64 {
+            assert!(!list.contains(&MinerIdentity::generate().xonly()));
+        }
+        assert!(KeyDenylist::empty().is_empty());
+    }
+
+    #[test]
+    fn extra_denied_key_is_honoured() {
+        let key = MinerIdentity::generate().xonly();
+        let list = KeyDenylist::empty().with_key(key);
+        assert!(list.contains(&key));
+        assert_eq!(list.len(), 1);
+    }
+
+    #[test]
+    fn negated_secret_of_a_denied_key_is_denied_too() {
+        // k and n-k have the same x-only key, so negating a known secret does not escape the list.
+        let list = KeyDenylist::known_secrets();
+        let mut one = [0u8; 32];
+        one[31] = 1;
+        let negated = SecretKey::from_slice(&one).unwrap().negate();
+        assert!(list.contains(&MinerIdentity::from_secret(negated).xonly()));
+    }
+
+    #[test]
+    fn ensure_allowed_refuses_the_test_fixture_and_accepts_a_random_key() {
+        let list = KeyDenylist::known_secrets();
+        let err = MinerIdentity::test_fixture()
+            .ensure_allowed(&list)
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+        assert!(err.to_string().contains("denylist"));
+        MinerIdentity::generate().ensure_allowed(&list).unwrap();
+        // An empty list never refuses.
+        MinerIdentity::test_fixture()
+            .ensure_allowed(&KeyDenylist::empty())
+            .unwrap();
     }
 }
