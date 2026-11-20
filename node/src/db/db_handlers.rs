@@ -1,14 +1,15 @@
 use crate::committed_metadata::parse_xonly_pubkey;
 use crate::config::PoolNetwork;
+use crate::uncommitted_metadata::parse_schnorr_signature;
 use crate::{
     bead::Bead,
     db::{init_db::init_db, BeadInsertData, BraidpoolDBTypes, InsertTupleTypes},
     error::DBErrors,
     utils::compute_block_hash,
 };
+use bitcoin::CompactTarget;
 use bitcoin::{
-    absolute::Time, block::Version as BlockVersion, ecdsa::Signature, hashes::Hash, BlockHash,
-    CompactTarget, PublicKey, TxMerkleNode, Txid,
+    absolute::Time, block::Version as BlockVersion, hashes::Hash, BlockHash, TxMerkleNode, Txid,
 };
 use serde_json::json;
 use sqlx::{Pool, Row, Sqlite};
@@ -213,7 +214,7 @@ impl DBHandler {
                 "extranonce1": hex::encode(bead.uncommitted_metadata.extra_nonce_1.to_be_bytes()),
                 "extranonce2": hex::encode(bead.uncommitted_metadata.extra_nonce_2.to_be_bytes()),
                 "broadcast_timestamp": bead.uncommitted_metadata.broadcast_timestamp.to_consensus_u32(),
-                "signature": hex::encode(bead.uncommitted_metadata.signature.to_vec()),
+                "signature": hex::encode(bead.uncommitted_metadata.signature.as_ref()),
             }));
             all_txs_json_parts.extend(txs);
             all_relatives_json_parts.extend(relatives);
@@ -651,7 +652,7 @@ fn build_bead_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Bead, DBErrors> 
         })?;
 
     bead.uncommitted_metadata.signature =
-        Signature::from_slice(&row.get::<Vec<u8>, _>("signature")).map_err(|e| {
+        parse_schnorr_signature(&row.get::<Vec<u8>, _>("signature")).map_err(|e| {
             DBErrors::TupleAttributeParsingError {
                 error: format!("Invalid signature: {}", e),
                 attribute: "signature".into(),
@@ -735,7 +736,7 @@ pub async fn fetch_bead_by_bead_hash(
                     }
                 })?;
             let signature =
-                Signature::from_slice(&row.get::<Vec<u8>, _>("signature")).map_err(|e| {
+                parse_schnorr_signature(&row.get::<Vec<u8>, _>("signature")).map_err(|e| {
                     DBErrors::TupleAttributeParsingError {
                         error: e.to_string(),
                         attribute: "signature".to_string(),

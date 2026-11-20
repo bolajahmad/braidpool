@@ -529,19 +529,20 @@ impl RpcServer for RpcServerImpl {
         let public_key_set: Option<HashSet<XOnlyPublicKey>> = match filter_params
             .public_keys
             .as_ref()
-            .filter(|keys| !keys.is_empty()) {
-                Some(keys) => {
-                    let mut set = HashSet::new();
-                    for key in keys.iter().filter(|k| !k.trim().is_empty()) {
-                        set.insert(
-                            parse_public_key_filter(key)
-                                .map_err(|message| ErrorObjectOwned::owned(1, message, None::<()>))?,
-                        );
-                    }
-                    Some(set)
+            .filter(|keys| !keys.is_empty())
+        {
+            Some(keys) => {
+                let mut set = HashSet::new();
+                for key in keys.iter().filter(|k| !k.trim().is_empty()) {
+                    set.insert(
+                        parse_public_key_filter(key)
+                            .map_err(|message| ErrorObjectOwned::owned(1, message, None::<()>))?,
+                    );
                 }
-                None => None,
-            };
+                Some(set)
+            }
+            None => None,
+        };
 
         let miner_ip_set: Option<HashSet<String>> = filter_params
             .miner_ips

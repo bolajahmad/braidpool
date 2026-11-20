@@ -1,5 +1,4 @@
 use crate::utils::BeadHash;
-use bitcoin::XOnlyPublicKey;
 use bitcoin::absolute::Time;
 use bitcoin::consensus::encode::Decodable;
 use bitcoin::consensus::encode::Encodable;
@@ -7,6 +6,7 @@ use bitcoin::consensus::encode::Error;
 use bitcoin::io::{self, Read, Write};
 use bitcoin::CompactTarget;
 use bitcoin::Txid;
+use bitcoin::XOnlyPublicKey;
 use serde::Deserialize;
 use serde::Serialize;
 use std::str::FromStr;
@@ -149,11 +149,16 @@ impl Decodable for CommittedMetadata {
     }
 }
 
-pub const PLACEHOLDER_XONLY_PUBKEY_HEX: &str = "50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0";
+/// BIP341 NUMS point: an x-only key with no known secret, used until beads carry a miner key.
+pub const PLACEHOLDER_XONLY_PUBKEY_HEX: &str =
+    "50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0";
+/// Placeholder `comm_pub_key` for beads this node forms.
 pub fn placeholder_xonly_pubkey() -> XOnlyPublicKey {
-    XOnlyPublicKey::from_str(PLACEHOLDER_XONLY_PUBKEY_HEX).expect("the BIP341 NUMS point is a valid x-only key")
+    XOnlyPublicKey::from_str(PLACEHOLDER_XONLY_PUBKEY_HEX)
+        .expect("the BIP341 NUMS point is a valid x-only key")
 }
 
+/// Parse a 32-byte BIP340 x-only key read from storage.
 pub fn parse_xonly_pubkey(bytes: &[u8]) -> Result<XOnlyPublicKey, String> {
     if bytes.len() != 32 {
         return Err(format!(
@@ -166,7 +171,8 @@ pub fn parse_xonly_pubkey(bytes: &[u8]) -> Result<XOnlyPublicKey, String> {
 
 /// secp256k1 generator G as BIP340 XOnlyPublicKey
 #[cfg(test)]
-pub const DEFAULT_XONLY_PUBKEY_HEX: &str = "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
+pub const DEFAULT_XONLY_PUBKEY_HEX: &str =
+    "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
 #[cfg(test)]
 pub fn default_xonly_pubkey() -> XOnlyPublicKey {
     XOnlyPublicKey::from_str(DEFAULT_XONLY_PUBKEY_HEX).expect("generator G is a valid x-only key")

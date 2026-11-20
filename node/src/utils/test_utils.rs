@@ -13,29 +13,26 @@ use crate::uncommitted_metadata::UnCommittedMetadata;
 #[cfg(test)]
 use bitcoin::block::Header as BlockHeader;
 #[cfg(test)]
-pub use bitcoin::ecdsa::Signature;
+pub use bitcoin::secp256k1::schnorr::Signature;
 #[cfg(test)]
 pub use bitcoin::{absolute::Time, p2p::address::AddrV2, PublicKey, Transaction};
 #[cfg(test)]
 pub mod test_utility_functions {
-    use std::{
-        collections::{HashMap, HashSet},
-        str::FromStr,
-    };
+    use std::collections::{HashMap, HashSet};
 
-    use bitcoin::secp256k1::{Message};
+    use bitcoin::{
+        block::Version as BlockVersion, hashes::Hash, BlockHash, CompactTarget, TxMerkleNode,
+    };
     #[cfg(test)]
     use bitcoin::{Txid, XOnlyPublicKey};
-    use bitcoin::{
-        block::Version as BlockVersion, hashes::Hash, BlockHash, CompactTarget, EcdsaSighashType,
-        TxMerkleNode,
-    };
-    use rand::{rngs::OsRng, RngCore};
     use serde::{Deserialize, Serialize};
 
-    use crate::committed_metadata::default_xonly_pubkey;
-#[cfg(test)]
+    #[cfg(test)]
     use crate::{braid::Braid, utils::compute_block_hash};
+    use crate::{
+        committed_metadata::default_xonly_pubkey,
+        uncommitted_metadata::placeholder_bip340_signature,
+    };
 
     pub use super::*;
     #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -346,33 +343,10 @@ pub mod test_utility_functions {
         let extra_nonce_1 = rand::random::<u64>();
         let extra_nonce_2 = rand::random::<u64>();
 
-        let secp = bitcoin::secp256k1::Secp256k1::new();
-
-        // Generate random secret key
-        let mut rng = OsRng::default();
-        let (secret_key, _) = secp.generate_keypair(&mut rng);
-
-        // Create random 32-byte message
-        let mut msg_bytes = [0u8; 32];
-        rng.fill_bytes(&mut msg_bytes);
-        let msg = Message::from_digest(msg_bytes);
-
-        // Sign the message
-        let signature = secp.sign_ecdsa(&msg, &secret_key);
-
-        // DER encode the signature and get hex
-        let der_sig = signature.serialize_der();
-        let hex = hex::encode(der_sig);
-
-        let sig = Signature {
-            signature: bitcoin::secp256k1::ecdsa::Signature::from_str(&hex).unwrap(),
-            sighash_type: EcdsaSighashType::All,
-        };
-
         let uncommitted_metadata = TestUnCommittedMetadataBuilder::new()
             .broadcast_timestamp(time_val)
             .extra_nonce(extra_nonce_1, extra_nonce_2)
-            .signature(sig)
+            .signature(placeholder_bip340_signature())
             .build();
         let bytes: [u8; 32] = [0u8; 32];
 

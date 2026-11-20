@@ -178,10 +178,7 @@ fn test_committed_metadata_default() {
         metadata.payout_address,
         data.payout_addresses.default.as_str()
     );
-    assert_eq!(
-        metadata.comm_pub_key,
-        placeholder_xonly_pubkey()
-    );
+    assert_eq!(metadata.comm_pub_key, placeholder_xonly_pubkey());
     assert_eq!(metadata.min_target, parse_target(data.targets.default_bits));
     assert_eq!(
         metadata.weak_target,

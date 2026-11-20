@@ -1,23 +1,23 @@
 use super::BraidPoolBehaviourEvent as BraidPoolEvent;
 use super::*;
 use crate::bead::{Bead, BeadResponse};
-use crate::committed_metadata::{default_xonly_pubkey};
+use crate::committed_metadata::default_xonly_pubkey;
 use crate::config::PoolNetwork;
+use crate::uncommitted_metadata::placeholder_bip340_signature;
 use crate::utils::compute_block_hash;
 use crate::utils::test_utils::test_utility_functions::{
-    Signature, TestCommittedMetadataBuilder, TestUnCommittedMetadataBuilder, Time, TimeVec,
+    TestCommittedMetadataBuilder, TestUnCommittedMetadataBuilder, Time, TimeVec,
 };
 use bitcoin::consensus::encode::deserialize;
 use bitcoin::consensus::serialize;
 use bitcoin::hashes::Hash;
+use bitcoin::CompactTarget;
 use bitcoin::{block::Header as BlockHeader, block::Version as BlockVersion};
-use bitcoin::{secp256k1, CompactTarget};
-use bitcoin::{BlockHash, EcdsaSighashType, TxMerkleNode};
+use bitcoin::{BlockHash, TxMerkleNode};
 use futures::StreamExt;
 use libp2p::floodsub::Topic;
 use libp2p::swarm::SwarmEvent;
 use libp2p::{Multiaddr, Swarm, SwarmBuilder};
-use std::str::FromStr;
 use tokio::time::timeout;
 
 // Helper function to create a test bead
@@ -43,15 +43,10 @@ fn create_test_bead() -> Bead {
     let extra_nonce_1: u64 = 42;
     let extra_nonce_2: u64 = 42;
 
-    let hex = "3046022100839c1fbc5304de944f697c9f4b1d01d1faeba32d751c0f7acb21ac8a0f436a72022100e89bd46bb3a5a62adc679f659b7ce876d83ee297c7a5587b2011c4fcc72eab45";
-    let sig = Signature {
-        signature: secp256k1::ecdsa::Signature::from_str(hex).unwrap(),
-        sighash_type: EcdsaSighashType::All,
-    };
     let test_uncommitted_metadata = TestUnCommittedMetadataBuilder::new()
         .broadcast_timestamp(time_val)
         .extra_nonce(extra_nonce_1, extra_nonce_2)
-        .signature(sig)
+        .signature(placeholder_bip340_signature())
         .build();
     let test_bytes: [u8; 32] = [0u8; 32];
     let test_block_header = BlockHeader {
@@ -380,7 +375,7 @@ async fn test_floodsub_message_propagation() {
                         "Bead succesfully received from a peer with peer id {:?} from topic {:?}",
                         msg.source, topic
                     );
-                    let res = tx.send(msg.data.to_ascii_lowercase()).await;
+                    let res = tx.send(msg.data.to_vec()).await;
                     match res {
                         Ok(_) => {
                             println!("Bead succesfully sent to the main thread reciever");

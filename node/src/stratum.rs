@@ -2,6 +2,7 @@ use crate::committed_metadata::placeholder_xonly_pubkey;
 use crate::config::PoolNetwork;
 use crate::error::StratumErrors;
 use crate::template_creator::calculate_merkle_root;
+use crate::uncommitted_metadata::placeholder_bip340_signature;
 use crate::utils::compute_block_hash;
 use crate::{SwarmHandler, TemplateId, EXTRANONCE1_SIZE, EXTRANONCE2_SIZE, EXTRANONCE_SEPARATOR};
 use bitcoin::absolute::Time;
@@ -1397,20 +1398,11 @@ impl DownstreamClient {
                     (extra_nonce_1, extra_nonce_2)
                 };
 
-                let placeholder_sig_bytes = [0u8; 64];
-                let sig = bitcoin::ecdsa::Signature {
-                    signature: bitcoin::secp256k1::ecdsa::Signature::from_compact(
-                        &placeholder_sig_bytes,
-                    )
-                    .expect("Valid placeholder signature"),
-                    sighash_type: bitcoin::EcdsaSighashType::All,
-                };
-
                 let uncommitted_metadata = crate::uncommitted_metadata::UnCommittedMetadata {
                     broadcast_timestamp: broadcast_time,
                     extra_nonce_1: extranonce_1_raw_value,
                     extra_nonce_2: extranonce_2_raw_value,
-                    signature: sig,
+                    signature: placeholder_bip340_signature(),
                 };
 
                 let bead = crate::bead::Bead {

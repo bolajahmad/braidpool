@@ -1,11 +1,11 @@
 //These implementations must be defined under lib.rs as they are required for intergration tests
-use crate::{committed_metadata::placeholder_xonly_pubkey, rpc_server::DashboardEvents, utils::compute_block_hash};
-use bitcoin::{
-    consensus::encode::deserialize, ecdsa::Signature, BlockHash, CompactTarget, EcdsaSighashType,
-    Txid,
+use crate::{
+    committed_metadata::placeholder_xonly_pubkey, rpc_server::DashboardEvents,
+    uncommitted_metadata::placeholder_bip340_signature, utils::compute_block_hash,
 };
+use bitcoin::{consensus::encode::deserialize, BlockHash, CompactTarget, Txid};
 use num::ToPrimitive;
-use std::{collections::HashMap, str::FromStr, sync::Arc, time::UNIX_EPOCH};
+use std::{collections::HashMap, sync::Arc, time::UNIX_EPOCH};
 
 use futures::lock::Mutex;
 use tokio::sync::mpsc::{self, Receiver, Sender};
@@ -379,12 +379,6 @@ impl SwarmHandler {
             weak_target: weak_target,
             miner_ip: downstream_client_ip.to_string(),
         };
-        //TODO:This will be either be generated via the `Pubkey` from config parameter from `~/.braidpool`
-        let hex = "3046022100839c1fbc5304de944f697c9f4b1d01d1faeba32d751c0f7acb21ac8a0f436a72022100e89bd46bb3a5a62adc679f659b7ce876d83ee297c7a5587b2011c4fcc72eab45";
-        let sig = Signature {
-            signature: bitcoin::secp256k1::ecdsa::Signature::from_str(hex).unwrap(),
-            sighash_type: EcdsaSighashType::All,
-        };
         //Current UNIX timestamp during broadcast of bead
         let current_system_time = std::time::SystemTime::now();
         let duration_since_epoch = match current_system_time.duration_since(UNIX_EPOCH) {
@@ -402,7 +396,7 @@ impl SwarmHandler {
             broadcast_timestamp: bitcoin::absolute::Time::from_consensus(unix_timestamp).unwrap(),
             extra_nonce_1: extranonce_1_raw_value,
             extra_nonce_2: extranonce_2_raw_value,
-            signature: sig,
+            signature: placeholder_bip340_signature(),
         };
         let weak_share = Bead {
             committed_metadata: candidate_block_bead_committed_metadata,

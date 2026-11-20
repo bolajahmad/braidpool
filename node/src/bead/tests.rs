@@ -8,9 +8,10 @@ use super::BeadSyncError;
 use super::Beads;
 use super::CommittedMetadata;
 use super::UnCommittedMetadata;
-use crate::committed_metadata::TimeVec;
 use crate::committed_metadata::default_xonly_pubkey;
+use crate::committed_metadata::TimeVec;
 use crate::config::PoolNetwork;
+use crate::uncommitted_metadata::placeholder_bip340_signature;
 use crate::utils::compute_block_hash;
 use crate::utils::create_test_bead;
 use crate::utils::test_utils::test_utility_functions::*;
@@ -20,12 +21,9 @@ use bitcoin::consensus::encode::Decodable;
 use bitcoin::consensus::encode::Encodable;
 use bitcoin::consensus::encode::Error as DeserializeError;
 use bitcoin::consensus::serialize;
-use bitcoin::ecdsa::Signature;
 use bitcoin::hashes::Hash;
-use bitcoin::secp256k1;
 use bitcoin::BlockHash;
 use bitcoin::CompactTarget;
-use bitcoin::EcdsaSighashType;
 use bitcoin::TxMerkleNode;
 use bitcoin::Txid;
 use bitcoin::{block::Header as BlockHeader, block::Version as BlockVersion};
@@ -71,17 +69,12 @@ fn test_serialized_committed_metadata() {
 #[test]
 
 fn test_serialized_uncommitted_metadata() {
-    let hex = "3046022100839c1fbc5304de944f697c9f4b1d01d1faeba32d751c0f7acb21ac8a0f436a72022100e89bd46bb3a5a62adc679f659b7ce876d83ee297c7a5587b2011c4fcc72eab45";
-    let sig = Signature {
-        signature: secp256k1::ecdsa::Signature::from_str(hex).unwrap(),
-        sighash_type: EcdsaSighashType::All,
-    };
     let time_val = Time::from_consensus(1653195600).unwrap();
     let extra_nonce: u64 = 42;
     let test_uncommitted_metadata = TestUnCommittedMetadataBuilder::new()
         .broadcast_timestamp(time_val)
         .extra_nonce(extra_nonce, extra_nonce)
-        .signature(sig)
+        .signature(placeholder_bip340_signature())
         .build();
     let serialized_val = serialize(&test_uncommitted_metadata);
 
@@ -97,6 +90,26 @@ fn test_serialized_uncommitted_metadata() {
         }
     };
     assert_eq!(deserialized_test, test_uncommitted_metadata);
+}
+
+#[test]
+fn uncommitted_metadata_signature_is_64_raw_bytes_and_round_trips() {
+    let mut sig_bytes = [0u8; 64];
+    for (i, byte) in sig_bytes.iter_mut().enumerate() {
+        *byte = i as u8 + 1;
+    }
+    let signature = bitcoin::secp256k1::schnorr::Signature::from_slice(&sig_bytes).unwrap();
+    let metadata = TestUnCommittedMetadataBuilder::new()
+        .broadcast_timestamp(Time::from_consensus(1653195600).unwrap())
+        .extra_nonce(1, 2)
+        .signature(signature)
+        .build();
+    let encoded = serialize(&metadata);
+    // 8 + 8 extranonces, 4 timestamp, 64 signature
+    assert_eq!(encoded.len(), 84);
+    assert_eq!(&encoded[20..], &sig_bytes);
+    let decoded: UnCommittedMetadata = deserialize(&encoded).unwrap();
+    assert_eq!(decoded.signature, signature);
 }
 #[test]
 
@@ -123,15 +136,10 @@ fn test_serialized_bead() {
         .transactions(vec![test_txid])
         .build();
     let extra_nonce: u64 = 42;
-    let hex = "3046022100839c1fbc5304de944f697c9f4b1d01d1faeba32d751c0f7acb21ac8a0f436a72022100e89bd46bb3a5a62adc679f659b7ce876d83ee297c7a5587b2011c4fcc72eab45";
-    let sig = Signature {
-        signature: secp256k1::ecdsa::Signature::from_str(hex).unwrap(),
-        sighash_type: EcdsaSighashType::All,
-    };
     let test_uncommitted_metadata = TestUnCommittedMetadataBuilder::new()
         .broadcast_timestamp(time_val)
         .extra_nonce(extra_nonce, extra_nonce)
-        .signature(sig)
+        .signature(placeholder_bip340_signature())
         .build();
     let test_bytes: [u8; 32] = [0u8; 32];
     let test_block_header = BlockHeader {
@@ -190,15 +198,10 @@ fn test_bead_response_serialization() {
         .transactions(vec![])
         .build();
     let extra_nonce: u64 = 42;
-    let hex = "3046022100839c1fbc5304de944f697c9f4b1d01d1faeba32d751c0f7acb21ac8a0f436a72022100e89bd46bb3a5a62adc679f659b7ce876d83ee297c7a5587b2011c4fcc72eab45";
-    let sig = Signature {
-        signature: secp256k1::ecdsa::Signature::from_str(hex).unwrap(),
-        sighash_type: EcdsaSighashType::All,
-    };
     let test_uncommitted_metadata = TestUnCommittedMetadataBuilder::new()
         .broadcast_timestamp(time_val)
         .extra_nonce(extra_nonce, extra_nonce)
-        .signature(sig)
+        .signature(placeholder_bip340_signature())
         .build();
     let test_bytes: [u8; 32] = [0u8; 32];
     let test_block_header = BlockHeader {

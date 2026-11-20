@@ -2,32 +2,46 @@ use bitcoin::absolute::Time;
 use bitcoin::consensus::encode::Decodable;
 use bitcoin::consensus::encode::Encodable;
 use bitcoin::consensus::encode::Error;
-use bitcoin::ecdsa::Signature;
 use bitcoin::io::{self, Read, Write};
-use bitcoin::EcdsaSighashType;
-use core::str::FromStr;
+use bitcoin::secp256k1::schnorr::Signature;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
+use serde::Serializer;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UnCommittedMetadata {
     pub extra_nonce_1: u64,
     pub extra_nonce_2: u64,
     pub broadcast_timestamp: Time,
+    #[serde(
+        serialize_with = "serialize_schnorr",
+        deserialize_with = "deserialize_schnorr"
+    )]
     pub signature: Signature,
+}
+fn serialize_schnorr<S>(sig: &Signature, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_str(&hex::encode(sig.as_ref()))
+}
+
+fn deserialize_schnorr<'de, D>(deserializer: D) -> Result<Signature, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let hex_str = String::deserialize(deserializer)?;
+    let bytes = hex::decode(&hex_str).map_err(serde::de::Error::custom)?;
+    Signature::from_slice(&bytes).map_err(serde::de::Error::custom)
 }
 impl Default for UnCommittedMetadata {
     fn default() -> Self {
-        let hex = "3046022100839c1fbc5304de944f697c9f4b1d01d1faeba32d751c0f7acb21ac8a0f436a72022100e89bd46bb3a5a62adc679f659b7ce876d83ee297c7a5587b2011c4fcc72eab45";
-        let default_sig = Signature {
-            signature: bitcoin::secp256k1::ecdsa::Signature::from_str(hex).unwrap(),
-            sighash_type: EcdsaSighashType::All,
-        };
         Self {
             extra_nonce_1: 0,
             extra_nonce_2: 0,
             broadcast_timestamp: Time::MIN,
-            signature: default_sig,
+            signature: placeholder_bip340_signature(),
         }
     }
 }
@@ -40,7 +54,8 @@ impl Encodable for UnCommittedMetadata {
             .broadcast_timestamp
             .to_consensus_u32()
             .consensus_encode(w)?;
-        len += self.signature.to_string().consensus_encode(w)?;
+        w.write_all(self.signature.as_ref())?;
+        len += 64;
         Ok(len)
     }
 }
@@ -56,10 +71,12 @@ impl Decodable for UnCommittedMetadata {
                     "invalid broadcast_timestamp in UnCommittedMetadata",
                 ))
             })?;
-        let signature = Signature::from_str(&String::consensus_decode(r)?).map_err(|_| {
+        let mut signature_bytes = [0u8; 64];
+        r.read_exact(&mut signature_bytes).map_err(Error::from)?;
+        let signature = Signature::from_slice(&signature_bytes).map_err(|_| {
             Error::from(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "invalid signature in UnCommittedMetadata",
+                "invalid schnorr signature in UnCommittedMetadata",
             ))
         })?;
 
@@ -70,4 +87,19 @@ impl Decodable for UnCommittedMetadata {
             signature,
         })
     }
+}
+
+/// Parse a 64-byte BIP340 Schnorr signature read from storage.
+pub fn parse_schnorr_signature(bytes: &[u8]) -> Result<Signature, String> {
+    Signature::from_slice(bytes)
+        .map_err(|e| format!("invalid Schnorr signature ({} bytes): {e}", bytes.len()))
+}
+
+/// All-zero bytes used as the signature until beads are signed.
+pub const PLACEHOLDER_BIP340_SIGNATURE_BYTES: [u8; 64] = [0u8; 64];
+
+/// Placeholder signature carried by every bead until bead signing lands. It does not verify.
+pub fn placeholder_bip340_signature() -> Signature {
+    Signature::from_slice(&PLACEHOLDER_BIP340_SIGNATURE_BYTES)
+        .expect("any 64 bytes form a schnorr::Signature")
 }

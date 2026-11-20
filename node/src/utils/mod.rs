@@ -1,6 +1,7 @@
 use crate::committed_metadata::placeholder_xonly_pubkey;
 // Bitcoin Imports
 use crate::config::PoolNetwork;
+use crate::uncommitted_metadata::placeholder_bip340_signature;
 use crate::{
     bead::Bead,
     committed_metadata::{CommittedMetadata, TimeVec, TxIdVec},
@@ -10,9 +11,8 @@ use ::bitcoin::BlockHash;
 use bitcoin::{
     absolute::Time,
     block::{Header as BlockHeader, Version as BlockVersion},
-    ecdsa::Signature,
     hashes::Hash,
-    secp256k1, CompactTarget, EcdsaSighashType, TxMerkleNode,
+    CompactTarget, TxMerkleNode,
 };
 // Standard Imports
 #[allow(unused_imports)]
@@ -36,7 +36,6 @@ use std::{
     io::ErrorKind,
     net::IpAddr,
     path::{Path, PathBuf},
-    str::FromStr,
 };
 /// Computes a bead's block hash under the rules of `network`.
 pub fn compute_block_hash(block_header: &BlockHeader, network: PoolNetwork) -> BlockHash {
@@ -156,16 +155,11 @@ pub fn create_test_bead(nonce: u32, prev_hash: Option<BlockHash>) -> Bead {
     let extra_nonce_1 = rand::random::<u64>();
     let extra_nonce_2 = rand::random::<u64>();
 
-    let hex = "3046022100839c1fbc5304de944f697c9f4b1d01d1faeba32d751c0f7acb21ac8a0f436a72022100e89bd46bb3a5a62adc679f659b7ce876d83ee297c7a5587b2011c4fcc72eab45";
-    let sig = Signature {
-        signature: secp256k1::ecdsa::Signature::from_str(hex).unwrap(),
-        sighash_type: EcdsaSighashType::All,
-    };
     let test_uncommitted_metadata = UnCommittedMetadata {
         broadcast_timestamp: time_val,
         extra_nonce_1: extra_nonce_1,
         extra_nonce_2: extra_nonce_2,
-        signature: sig,
+        signature: placeholder_bip340_signature(),
     };
     let test_bytes: [u8; 32] = [0u8; 32];
     let test_block_header = BlockHeader {

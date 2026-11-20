@@ -1,7 +1,8 @@
-use crate::{bead::Bead, committed_metadata::parse_xonly_pubkey};
 use crate::config::PoolNetwork;
 use crate::error::DBErrors;
+use crate::uncommitted_metadata::parse_schnorr_signature;
 use crate::utils::compute_block_hash;
+use crate::{bead::Bead, committed_metadata::parse_xonly_pubkey};
 use bitcoin::{hashes::Hash, BlockHash};
 use sqlx::{Pool, Sqlite};
 use std::path::Path;
@@ -84,7 +85,7 @@ impl AuditDBHandler {
                     .broadcast_timestamp
                     .to_consensus_u32() as i64,
             )
-            .bind(bead.uncommitted_metadata.signature.to_vec())
+            .bind(bead.uncommitted_metadata.signature.as_ref().as_slice())
             .bind(created_at)
             .execute(&mut *tx)
             .await
@@ -221,7 +222,7 @@ impl AuditDBHandler {
             attribute: "broadcast_timestamp".to_string(),
         })?;
         let signature_bytes: Vec<u8> = row.get("signature");
-        let signature = bitcoin::ecdsa::Signature::from_slice(&signature_bytes).map_err(|e| {
+        let signature = parse_schnorr_signature(&signature_bytes).map_err(|e| {
             DBErrors::TupleAttributeParsingError {
                 error: e.to_string(),
                 attribute: "signature".to_string(),

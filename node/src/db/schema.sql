@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS Bead (
     extranonce1         TEXT NOT NULL,
     extranonce2         TEXT NOT NULL,
     broadcast_timestamp INTEGER NOT NULL,       -- 64-bit unix epoch in MICROseconds
-    signature           BLOB NOT NULL,
+    signature           BLOB NOT NULL CHECK (length(signature) = 64),
     -- Constraints
     UNIQUE (nVersion, hashPrevBlock, hashMerkleRoot, nTime, nBits, nNonce),
     UNIQUE (hash)

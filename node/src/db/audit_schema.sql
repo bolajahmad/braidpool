@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS AuditBead (
     extranonce1         TEXT NOT NULL,
     extranonce2         TEXT NOT NULL,
     broadcast_timestamp INTEGER NOT NULL,
-    signature           BLOB NOT NULL,    
+    signature           BLOB NOT NULL CHECK (length(signature) = 64),    
     created_at          INTEGER NOT NULL,
     UNIQUE (version, prev_block_hash, merkle_root, timestamp, bits, nonce)
 );
