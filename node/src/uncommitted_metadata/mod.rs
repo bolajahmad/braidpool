@@ -2,6 +2,7 @@ use bitcoin::absolute::Time;
 use bitcoin::consensus::encode::Decodable;
 use bitcoin::consensus::encode::Encodable;
 use bitcoin::consensus::encode::Error;
+use bitcoin::consensus::encode::{ReadExt, WriteExt};
 use bitcoin::io::{self, Read, Write};
 use bitcoin::secp256k1::schnorr::Signature;
 use serde::Deserialize;
@@ -54,8 +55,10 @@ impl Encodable for UnCommittedMetadata {
             .broadcast_timestamp
             .to_consensus_u32()
             .consensus_encode(w)?;
-        w.write_all(self.signature.as_ref())?;
-        len += 64;
+        // `[u8; 64]` has no consensus codec; write it the way the codec writes fixed arrays.
+        let signature_bytes = self.signature.serialize();
+        w.emit_slice(&signature_bytes)?;
+        len += signature_bytes.len();
         Ok(len)
     }
 }
@@ -72,7 +75,7 @@ impl Decodable for UnCommittedMetadata {
                 ))
             })?;
         let mut signature_bytes = [0u8; 64];
-        r.read_exact(&mut signature_bytes).map_err(Error::from)?;
+        r.read_slice(&mut signature_bytes)?;
         let signature = Signature::from_slice(&signature_bytes).map_err(|_| {
             Error::from(io::Error::new(
                 io::ErrorKind::InvalidData,

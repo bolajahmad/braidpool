@@ -103,8 +103,7 @@ impl Encodable for CommittedMetadata {
             .start_timestamp
             .to_consensus_u32()
             .consensus_encode(w)?;
-        let pubkey_bytes = self.comm_pub_key.serialize();
-        len += pubkey_bytes.consensus_encode(w)?;
+        len += self.comm_pub_key.serialize().consensus_encode(w)?;
         len += self.min_target.consensus_encode(w)?;
         len += self.weak_target.consensus_encode(w)?;
         len += self.miner_ip.consensus_encode(w)?;
@@ -124,8 +123,7 @@ impl Decodable for CommittedMetadata {
                 "invalid start_timestamp in CommittedMetadata",
             ))
         })?;
-        let mut pubkey_bytes = [0u8; 32];
-        r.read_exact(&mut pubkey_bytes).map_err(Error::from)?;
+        let pubkey_bytes = <[u8; 32]>::consensus_decode(r)?;
         let comm_pub_key = XOnlyPublicKey::from_slice(&pubkey_bytes).map_err(|_| {
             Error::from(io::Error::new(
                 io::ErrorKind::InvalidData,

@@ -111,6 +111,36 @@ fn uncommitted_metadata_signature_is_64_raw_bytes_and_round_trips() {
     let decoded: UnCommittedMetadata = deserialize(&encoded).unwrap();
     assert_eq!(decoded.signature, signature);
 }
+
+#[test]
+fn uncommitted_metadata_with_a_truncated_signature_is_rejected() {
+    let metadata = TestUnCommittedMetadataBuilder::new()
+        .broadcast_timestamp(Time::from_consensus(1653195600).unwrap())
+        .extra_nonce(1, 2)
+        .signature(placeholder_bip340_signature())
+        .build();
+    let encoded = serialize(&metadata);
+    let truncated = &encoded[..encoded.len() - 1];
+    assert!(deserialize::<UnCommittedMetadata>(truncated).is_err());
+}
+
+#[test]
+fn committed_metadata_with_an_off_curve_key_is_rejected() {
+    let metadata = CommittedMetadata::default();
+    let mut encoded = serialize(&metadata);
+    let key = metadata.comm_pub_key.serialize();
+    let at = encoded
+        .windows(32)
+        .position(|w| w == key)
+        .expect("key bytes are in the encoding");
+    // x = 0 is not the x-coordinate of any secp256k1 point.
+    encoded[at..at + 32].copy_from_slice(&[0u8; 32]);
+    let error = deserialize::<CommittedMetadata>(&encoded).unwrap_err();
+    assert!(
+        format!("{error:?}").contains("x-only comm_pub_key"),
+        "{error:?}"
+    );
+}
 #[test]
 
 fn test_serialized_bead() {
