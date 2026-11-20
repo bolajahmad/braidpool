@@ -581,3 +581,29 @@ impl fmt::Display for UnsupportedNetworkError {
     }
 }
 impl std::error::Error for UnsupportedNetworkError {}
+
+/// Errors while signing or verifying a bead's uncommitted Schnorr signature.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BeadSignError {
+    /// Consensus encoding of signed fields failed.
+    Encode(String),
+    /// The Schnorr signature does not match `comm_pub_key`.
+    InvalidSignature,
+    /// The operating system's random number generator failed to produce the BIP340
+    /// auxiliary randomness.
+    Randomness(String),
+}
+impl fmt::Display for BeadSignError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BeadSignError::Encode(e) => write!(f, "failed to encode bead sighash payload: {e}"),
+            BeadSignError::InvalidSignature => {
+                write!(f, "invalid Schnorr signature on uncommitted metadata")
+            }
+            BeadSignError::Randomness(e) => {
+                write!(f, "failed to draw BIP340 auxiliary randomness: {e}")
+            }
+        }
+    }
+}
+impl std::error::Error for BeadSignError {}
