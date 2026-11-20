@@ -1,3 +1,4 @@
+use crate::committed_metadata::placeholder_xonly_pubkey;
 // Bitcoin Imports
 use crate::config::PoolNetwork;
 use crate::{
@@ -133,9 +134,6 @@ pub fn resolve_datadir(datadir: &Path) -> std::io::Result<PathBuf> {
 
 // Helper function to create test beads
 pub fn create_test_bead(nonce: u32, prev_hash: Option<BlockHash>) -> Bead {
-    let public_key = "020202020202020202020202020202020202020202020202020202020202020202"
-        .parse::<bitcoin::PublicKey>()
-        .unwrap();
     let time_hash_set = TimeVec(Vec::new());
     let mut parent_hash_set: Vec<BlockHash> = Vec::new();
     if let Some(hash) = prev_hash {
@@ -145,7 +143,7 @@ pub fn create_test_bead(nonce: u32, prev_hash: Option<BlockHash>) -> Bead {
     let min_target = CompactTarget::from_consensus(486604799);
     let time_val = Time::from_consensus(1653195600).unwrap();
     let test_committed_metadata: CommittedMetadata = CommittedMetadata {
-        comm_pub_key: public_key,
+        comm_pub_key: placeholder_xonly_pubkey(),
         min_target: min_target,
         miner_ip: "".to_string(),
         transaction_ids: TxIdVec(vec![]),

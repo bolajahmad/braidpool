@@ -1,5 +1,5 @@
 //These implementations must be defined under lib.rs as they are required for intergration tests
-use crate::{rpc_server::DashboardEvents, utils::compute_block_hash};
+use crate::{committed_metadata::placeholder_xonly_pubkey, rpc_server::DashboardEvents, utils::compute_block_hash};
 use bitcoin::{
     consensus::encode::deserialize, ecdsa::Signature, BlockHash, CompactTarget, EcdsaSighashType,
     Txid,
@@ -338,10 +338,6 @@ impl SwarmHandler {
             .collect();
         let transaction_ids: Vec<Txid> = Vec::from(ids);
         debug!("Broadcasting bead via floodsub");
-        //TODO:Currently temprorary placeholder will be replaced in upcoming PRs
-        let public_key = "020202020202020202020202020202020202020202020202020202020202020202"
-            .parse::<bitcoin::PublicKey>()
-            .unwrap();
         let mut braid_data = self.braid_arc.write().await;
         let mut pairs: Vec<(BlockHash, bitcoin::absolute::Time)> = braid_data
             .tips
@@ -373,7 +369,7 @@ impl SwarmHandler {
             bitcoin::blockdata::locktime::absolute::Time::from_consensus(job_sent_timestamp)
                 .unwrap();
         let candidate_block_bead_committed_metadata = CommittedMetadata {
-            comm_pub_key: public_key,
+            comm_pub_key: placeholder_xonly_pubkey(),
             transaction_ids: TxIdVec(transaction_ids),
             parents: parent_hash_set,
             parent_bead_timestamps: time_hash_set,

@@ -1,6 +1,7 @@
 use super::BraidPoolBehaviourEvent as BraidPoolEvent;
 use super::*;
 use crate::bead::{Bead, BeadResponse};
+use crate::committed_metadata::{default_xonly_pubkey};
 use crate::config::PoolNetwork;
 use crate::utils::compute_block_hash;
 use crate::utils::test_utils::test_utility_functions::{
@@ -22,9 +23,6 @@ use tokio::time::timeout;
 // Helper function to create a test bead
 fn create_test_bead() -> Bead {
     let _address = String::from("127.0.0.1:8888");
-    let public_key = "020202020202020202020202020202020202020202020202020202020202020202"
-        .parse::<bitcoin::PublicKey>()
-        .unwrap();
     let socket = String::from("127.0.0.1");
     let time_hash_set = TimeVec(Vec::new());
     let parent_hash_set: Vec<BlockHash> = Vec::new();
@@ -32,7 +30,7 @@ fn create_test_bead() -> Bead {
     let min_target = CompactTarget::from_consensus(486604799);
     let time_val = Time::from_consensus(1653195600).unwrap();
     let test_committed_metadata = TestCommittedMetadataBuilder::new()
-        .comm_pub_key(public_key)
+        .comm_pub_key(default_xonly_pubkey())
         .miner_ip(socket)
         .start_timestamp(time_val)
         .parents(parent_hash_set)

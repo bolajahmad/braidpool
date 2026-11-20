@@ -1,3 +1,4 @@
+use crate::committed_metadata::parse_xonly_pubkey;
 use crate::config::PoolNetwork;
 use crate::{
     bead::Bead,
@@ -205,7 +206,7 @@ impl DBHandler {
                 "nNonce": bead.block_header.nonce,
                 "payout_address": hex::encode(bead.committed_metadata.payout_address.as_bytes()),
                 "start_timestamp": bead.committed_metadata.start_timestamp.to_consensus_u32(),
-                "comm_pub_key": hex::encode(bead.committed_metadata.comm_pub_key.to_bytes()),
+                "comm_pub_key": hex::encode(bead.committed_metadata.comm_pub_key.serialize()),
                 "min_target": bead.committed_metadata.min_target.to_consensus(),
                 "weak_target": bead.committed_metadata.weak_target.to_consensus(),
                 "miner_ip": bead.committed_metadata.miner_ip.clone(),
@@ -607,7 +608,7 @@ fn build_bead_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Bead, DBErrors> 
         })?;
 
     bead.committed_metadata.comm_pub_key =
-        PublicKey::from_slice(&row.get::<Vec<u8>, _>("comm_pub_key")).map_err(|e| {
+        parse_xonly_pubkey(&row.get::<Vec<u8>, _>("comm_pub_key")).map_err(|e| {
             DBErrors::TupleAttributeParsingError {
                 error: format!("Invalid comm_pub_key: {}", e),
                 attribute: "comm_pub_key".into(),
@@ -707,7 +708,7 @@ pub async fn fetch_bead_by_bead_hash(
                 }
             })?;
             let pub_key =
-                PublicKey::from_slice(&row.get::<Vec<u8>, _>("comm_pub_key")).map_err(|e| {
+                parse_xonly_pubkey(&row.get::<Vec<u8>, _>("comm_pub_key")).map_err(|e| {
                     DBErrors::TupleAttributeParsingError {
                         error: format!("Invalid public key: {}", e),
                         attribute: "comm_pub_key".to_string(),

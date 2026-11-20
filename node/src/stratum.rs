@@ -1,3 +1,4 @@
+use crate::committed_metadata::placeholder_xonly_pubkey;
 use crate::config::PoolNetwork;
 use crate::error::StratumErrors;
 use crate::template_creator::calculate_merkle_root;
@@ -1321,10 +1322,6 @@ impl DownstreamClient {
                     upstream_difficulty = ?upstream_difficulty,
                     "Calculated bead difficulty targets"
                 );
-                let public_key =
-                    "020202020202020202020202020202020202020202020202020202020202020202"
-                        .parse::<bitcoin::PublicKey>()
-                        .unwrap();
                 let job_time = bitcoin::absolute::Time::from_consensus(submitted_job.job_sent_time)
                     .map_err(|e| {
                         error!(
@@ -1338,7 +1335,7 @@ impl DownstreamClient {
                     })?;
 
                 let committed_metadata = crate::committed_metadata::CommittedMetadata {
-                    comm_pub_key: public_key,
+                    comm_pub_key: placeholder_xonly_pubkey(),
                     miner_ip: self.downstream_ip.clone(),
                     start_timestamp: job_time,
                     transaction_ids: crate::committed_metadata::TxIdVec(Vec::new()),

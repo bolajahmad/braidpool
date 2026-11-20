@@ -1,6 +1,6 @@
 use crate::bead::Bead;
 use crate::braid::{AddBeadStatus, Braid};
-use crate::committed_metadata::CommittedMetadata;
+use crate::committed_metadata::{CommittedMetadata, placeholder_xonly_pubkey};
 #[cfg(test)]
 use crate::config::PoolNetwork;
 use crate::db::audit_db_handlers::AuditDBHandler;
@@ -47,10 +47,6 @@ fn create_genesis_bead_for_audit() -> Result<Bead, String> {
         nonce: 0,
     };
 
-    let public_key = "020202020202020202020202020202020202020202020202020202020202020202"
-        .parse::<bitcoin::PublicKey>()
-        .unwrap();
-
     // Create committed metadata with no parents
     let committed_metadata = CommittedMetadata {
         transaction_ids: TxIdVec(Vec::new()),
@@ -59,7 +55,7 @@ fn create_genesis_bead_for_audit() -> Result<Bead, String> {
         payout_address: "bc1qgdjqv0av3q56jvd82tkdjpy7gdp9ut8tlqmgrpmv24sq90ecnvqqjwvw97"
             .to_string(),
         start_timestamp: genesis_time,
-        comm_pub_key: public_key,
+        comm_pub_key: placeholder_xonly_pubkey(),
         min_target: CompactTarget::from_consensus(0x1d00ffff),
         weak_target: CompactTarget::from_consensus(0x1d00ffff),
         miner_ip: "system".to_string(),
@@ -854,7 +850,7 @@ pub struct MinerStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bead::Bead;
+    use crate::{bead::Bead, committed_metadata::default_xonly_pubkey};
     use crate::committed_metadata::CommittedMetadata;
     use crate::uncommitted_metadata::UnCommittedMetadata;
     use bitcoin::{absolute::Time, ecdsa::Signature, EcdsaSighashType};
@@ -880,10 +876,7 @@ mod tests {
                 parent_bead_timestamps: crate::committed_metadata::TimeVec(vec![]),
                 payout_address: "bc1qtest".to_string(),
                 start_timestamp: Time::from_consensus(1653195600).unwrap(),
-                comm_pub_key: bitcoin::PublicKey::from_str(
-                    "020202020202020202020202020202020202020202020202020202020202020202",
-                )
-                .unwrap(),
+                comm_pub_key: default_xonly_pubkey(),
                 min_target: bitcoin::CompactTarget::from_consensus(486604799),
                 weak_target: bitcoin::CompactTarget::from_consensus(486604799),
                 miner_ip: "127.0.0.1".to_string(),

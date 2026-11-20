@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS AuditBead (
     nonce               INTEGER NOT NULL CHECK (nonce >= 0 AND nonce < 0x100000000),    
     payout_address      TEXT NOT NULL,
     start_timestamp     INTEGER NOT NULL,
-    comm_pub_key        BLOB NOT NULL,
+    comm_pub_key        BLOB NOT NULL CHECK (length(comm_pub_key) = 32),
     min_target          INTEGER NOT NULL CHECK (min_target >= 0 AND min_target < 0x100000000),
     weak_target         INTEGER NOT NULL CHECK (weak_target >= 0 AND weak_target < 0x100000000),
     miner_ip            TEXT NOT NULL,    

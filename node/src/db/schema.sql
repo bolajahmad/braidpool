@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS Bead (
     -- Committed Metadata
     payout_address      BLOB NOT NULL,
     start_timestamp     INTEGER NOT NULL,           -- 64-bit unix epoch in MICROseconds
-    comm_pub_key        BLOB NOT NULL,
+    comm_pub_key        BLOB NOT NULL CHECK (length(comm_pub_key) = 32),
     min_target          INTEGER CHECK (min_target >= 0 AND min_target < 0x100000000),
     weak_target         INTEGER CHECK (weak_target >= 0 AND weak_target < 0x100000000),
     miner_ip            TEXT NOT NULL,

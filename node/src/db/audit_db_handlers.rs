@@ -1,4 +1,4 @@
-use crate::bead::Bead;
+use crate::{bead::Bead, committed_metadata::parse_xonly_pubkey};
 use crate::config::PoolNetwork;
 use crate::error::DBErrors;
 use crate::utils::compute_block_hash;
@@ -73,7 +73,7 @@ impl AuditDBHandler {
             .bind(bead.block_header.nonce as i64)
             .bind(&bead.committed_metadata.payout_address)
             .bind(bead.committed_metadata.start_timestamp.to_consensus_u32() as i64)
-            .bind(bead.committed_metadata.comm_pub_key.to_bytes())
+            .bind(bead.committed_metadata.comm_pub_key.serialize().as_slice())
             .bind(bead.committed_metadata.min_target.to_consensus() as i64)
             .bind(bead.committed_metadata.weak_target.to_consensus() as i64)
             .bind(miner_ip)
@@ -186,7 +186,7 @@ impl AuditDBHandler {
                 })?;
 
         let comm_pub_key_bytes: Vec<u8> = row.get("comm_pub_key");
-        let comm_pub_key = bitcoin::PublicKey::from_slice(&comm_pub_key_bytes).map_err(|e| {
+        let comm_pub_key = parse_xonly_pubkey(&comm_pub_key_bytes).map_err(|e| {
             DBErrors::TupleAttributeParsingError {
                 error: e.to_string(),
                 attribute: "comm_pub_key".to_string(),

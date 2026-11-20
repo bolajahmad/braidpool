@@ -23,9 +23,9 @@ pub mod test_utility_functions {
         str::FromStr,
     };
 
-    use bitcoin::secp256k1::{Message, Secp256k1, SecretKey};
+    use bitcoin::secp256k1::{Message};
     #[cfg(test)]
-    use bitcoin::Txid;
+    use bitcoin::{Txid, XOnlyPublicKey};
     use bitcoin::{
         block::Version as BlockVersion, hashes::Hash, BlockHash, CompactTarget, EcdsaSighashType,
         TxMerkleNode,
@@ -33,7 +33,8 @@ pub mod test_utility_functions {
     use rand::{rngs::OsRng, RngCore};
     use serde::{Deserialize, Serialize};
 
-    #[cfg(test)]
+    use crate::committed_metadata::default_xonly_pubkey;
+#[cfg(test)]
     use crate::{braid::Braid, utils::compute_block_hash};
 
     pub use super::*;
@@ -183,7 +184,7 @@ pub mod test_utility_functions {
         parent_bead_timestamps: Option<TimeVec>,
         payout_address: Option<String>,
         start_timestamp: Option<Time>,
-        comm_pub_key: Option<PublicKey>,
+        comm_pub_key: Option<XOnlyPublicKey>,
         min_target: Option<CompactTarget>,
         weak_target: Option<CompactTarget>,
         miner_ip: Option<String>,
@@ -230,7 +231,7 @@ pub mod test_utility_functions {
             self
         }
 
-        pub fn comm_pub_key(mut self, key: PublicKey) -> Self {
+        pub fn comm_pub_key(mut self, key: XOnlyPublicKey) -> Self {
             self.comm_pub_key = Some(key);
             self
         }
@@ -311,18 +312,10 @@ pub mod test_utility_functions {
             }
         }
     }
-    fn generate_random_public_key_string() -> String {
-        let secp = &Secp256k1::new();
-        let secret_key = SecretKey::new(&mut rand::thread_rng());
-        hex::encode(secret_key.public_key(secp).serialize())
-    }
 
     pub fn emit_bead() -> Bead {
         // This function creates a random bead for testing purposes.
 
-        let random_public_key = generate_random_public_key_string()
-            .parse::<bitcoin::PublicKey>()
-            .expect("An error occurred while generating Secret key rand bytes");
         // Generate a reasonable timestamp (between 2020-01-01 and now)
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -331,7 +324,6 @@ pub mod test_utility_functions {
         let current_time = bitcoin::absolute::Time::from_consensus(now).unwrap();
 
         let _address = String::from("127.0.0.1:8888");
-        let public_key = random_public_key;
         let socket: String = String::from("127.0.0.1");
         let time_hash_set = TimeVec(Vec::new());
         let parent_hash_set: Vec<BlockHash> = Vec::new();
@@ -340,7 +332,7 @@ pub mod test_utility_functions {
         let time_val = current_time;
 
         let committed_metadata = TestCommittedMetadataBuilder::new()
-            .comm_pub_key(public_key)
+            .comm_pub_key(default_xonly_pubkey())
             .miner_ip(socket)
             .start_timestamp(time_val)
             .parents(parent_hash_set)
